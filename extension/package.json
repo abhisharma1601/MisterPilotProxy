@@ -1,0 +1,70 @@
+{
+  "name": "misterpilot",
+  "displayName": "MisterPilot",
+  "description": "AI coding assistant powered by DeepSeek",
+  "version": "0.1.0",
+  "publisher": "misterpilot",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "misterpilot-sidebar",
+          "title": "MisterPilot",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "misterpilot-sidebar": [
+        {
+          "type": "webview",
+          "id": "misterpilot.chat",
+          "name": "Chat",
+          "contextualTitle": "MisterPilot Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "misterpilot.setApiKey",
+        "title": "MisterPilot: Set API Key"
+      }
+    ],
+    "configuration": {
+      "title": "MisterPilot",
+      "properties": {
+        "misterpilot.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "URL of the MisterPilot FastAPI backend"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build:all",
+    "build:all": "npm run build:webview && npm run build:ext",
+    "build:webview": "cd webview && npm install && npm run build",
+    "build:ext": "tsc -p .",
+    "watch:ext": "tsc -watch -p .",
+    "watch:webview": "cd webview && npm run dev",
+    "lint": "eslint src --ext ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.19.0",
+    "@typescript-eslint/parser": "^6.19.0",
+    "@vscode/vsce": "^2.15.0",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3"
+  }
+}

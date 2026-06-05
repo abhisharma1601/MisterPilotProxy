@@ -1,0 +1,45 @@
+# Python virtual environment
+.venv/
+venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Node (extension)
+node_modules/
+
+# Extension build artifacts
+extension/out/
+extension/webview-dist/
+extension/polyfill-file.js
+*.vsix
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
