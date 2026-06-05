@@ -30,6 +30,28 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('misterpilot.setBackendUrl', async () => {
+      const current = vscode.workspace
+        .getConfiguration('misterpilot')
+        .get<string>('backendUrl', 'http://localhost:8000');
+      const url = await vscode.window.showInputBox({
+        prompt: 'Enter the MisterPilot backend URL',
+        placeHolder: 'http://localhost:8000',
+        value: current,
+        ignoreFocusOut: true,
+        validateInput: (v) => {
+          try { new URL(v); return null; } catch { return 'Enter a valid URL (e.g. http://localhost:8000)'; }
+        },
+      });
+      if (url === undefined) return;
+      await vscode.workspace
+        .getConfiguration('misterpilot')
+        .update('backendUrl', url, vscode.ConfigurationTarget.Global);
+      vscode.window.showInformationMessage(`MisterPilot: Backend URL set to ${url}`);
+    })
+  );
 }
 
 export function deactivate(): void {}

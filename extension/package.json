@@ -36,6 +36,10 @@
       {
         "command": "misterpilot.setApiKey",
         "title": "MisterPilot: Set API Key"
+      },
+      {
+        "command": "misterpilot.setBackendUrl",
+        "title": "MisterPilot: Set Backend URL"
       }
     ],
     "configuration": {
@@ -63,7 +67,7 @@
     "@types/vscode": "^1.85.0",
     "@typescript-eslint/eslint-plugin": "^6.19.0",
     "@typescript-eslint/parser": "^6.19.0",
-    "@vscode/vsce": "^2.15.0",
+    "@vscode/vsce": "^2.24.0",
     "eslint": "^8.56.0",
     "typescript": "^5.3.3"
   }
