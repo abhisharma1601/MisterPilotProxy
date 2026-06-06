@@ -36,7 +36,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._postBackendUrlStatus(view.webview);
           break;
         case 'chat':
-          await this._handleChat(msg.messages, view.webview);
+          await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
           break;
         case 'stopChat':
           this._abortController?.abort();
@@ -129,12 +129,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async _handleChat(
     messages: Record<string, unknown>[],
-    webview: vscode.Webview
+    webview: vscode.Webview,
+    model: string,
+    mode: string
   ): Promise<void> {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
     const apiKey = await this._context.secrets.get('misterpilot.apiKey') ?? '';
 
-    const body: Record<string, unknown> = { messages };
+    const body: Record<string, unknown> = { messages, model, mode };
     if (workspaceRoot) body.workspace_root = workspaceRoot;
 
     this._abortController = new AbortController();
