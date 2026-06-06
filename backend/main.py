@@ -6,7 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from . import __version__
 from .config import get_config
 from .logging_config import setup_logging
-from .api.routes import chat, workspace, edit, terminal, agent
+from .api.routes import chat, workspace, edit, terminal, agent, model
 
 
 @asynccontextmanager
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(edit.router, prefix="/edit", tags=["edit"])
     app.include_router(terminal.router, prefix="/terminal", tags=["terminal"])
     app.include_router(agent.router, prefix="/agent", tags=["agent"])
+    app.include_router(model.router, prefix="/model", tags=["model"])
 
     return app
 

@@ -191,6 +191,35 @@ class DeepSeekClient:
 
         raise last_exc or RuntimeError("stream_with_tools failed after retries")
 
+    async def complete(
+        self,
+        messages: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> Any:
+        """Non-streaming completion, returns the raw OpenAI ChatCompletion object."""
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max(1, self._cfg.max_retries)):
+            try:
+                return await self._client.chat.completions.create(
+                    model=model or self._cfg.model,
+                    messages=messages,
+                    stream=False,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                raise self._safe_error(exc)
+            except (APIConnectionError, APITimeoutError) as exc:
+                last_exc = exc
+                if attempt < self._cfg.max_retries - 1:
+                    await asyncio.sleep(2**attempt)
+                continue
+
+        raise last_exc or RuntimeError("complete failed after retries")
+
     async def close(self) -> None:
         await self._client.close()
 
