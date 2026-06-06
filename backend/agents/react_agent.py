@@ -23,7 +23,7 @@ from ..services.edit_service import get_edit_service
 from ..services.pii_service import get_pii_pipeline
 from ..services.terminal_service import get_terminal_service
 from ..services.workspace import list_files
-from ..tools.file_tools import read_file, PathTraversalError
+from ..tools.file_tools import read_file, BlockedFileError, PathTraversalError
 from ..tools.search_tools import search_code
 
 log = logging.getLogger(__name__)
@@ -217,7 +217,11 @@ async def _execute_tool(
     try:
         if name == "read_file":
             path = args.get("path", "")
-            raw = read_file(workspace_root, path)  # type: ignore[arg-type]
+            try:
+                raw = read_file(workspace_root, path)  # type: ignore[arg-type]
+            except BlockedFileError as exc:
+                yield {"type": "_result", "content": str(exc)}
+                return
             lines = raw.splitlines()
             numbered = "\n".join(f"{i + 1}: {l}" for i, l in enumerate(lines[:150]))
             suffix = f"\n... ({len(lines) - 150} more lines)" if len(lines) > 150 else ""
@@ -327,7 +331,7 @@ async def _execute_tool(
                 "workspace_root": cmd.workspace_root,
             }
 
-            result = await registry.wait_for(cmd.id, timeout=300.0)
+            result = await registry.wait_for(cmd.id, timeout=None)
             if result is None:
                 yield {"type": "_result", "content": "Approval timed out — command was not executed."}
             elif not result.get("approved"):
@@ -355,6 +359,13 @@ ASK_TOOLS: List[Dict[str, Any]] = [
     t for t in AGENT_TOOLS
     if t["function"]["name"] in ("read_file", "list_files", "search_code")
 ]
+
+
+def _sanitize_err(msg: str, api_key: Optional[str]) -> str:
+    """Strip the API key from error messages before they reach the UI."""
+    if api_key and len(api_key) > 8 and api_key in msg:
+        msg = msg.replace(api_key, "[REDACTED]")
+    return msg
 
 
 async def run(
@@ -427,7 +438,7 @@ async def run(
                         total_prompt_tokens += event["usage"].prompt_tokens
                         total_completion_tokens += event["usage"].completion_tokens
         except Exception as exc:  # noqa: BLE001
-            yield {"type": "error", "message": f"LLM error: {exc}"}
+            yield {"type": "error", "message": _sanitize_err(f"LLM error: {exc}", api_key)}
             yield {"type": "done"}
             return
 

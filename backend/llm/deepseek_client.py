@@ -1,7 +1,7 @@
 import asyncio
 from typing import AsyncIterator, Dict, Any, List, Optional
 
-from openai import AsyncOpenAI, APIConnectionError, APITimeoutError
+from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, AuthenticationError, PermissionDeniedError
 
 from ..config import get_config
 
@@ -17,6 +17,12 @@ class DeepSeekClient:
             timeout=float(cfg.timeout),
             max_retries=0,
         )
+
+    def _safe_error(self, exc: Exception) -> RuntimeError:
+        """Re-raise API errors without leaking the key in the message."""
+        if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
+            return RuntimeError("LLM authentication failed — check your API key.")
+        return RuntimeError(str(exc))
 
     async def complete_with_tools(
         self,
@@ -39,6 +45,8 @@ class DeepSeekClient:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                raise self._safe_error(exc)
             except (APIConnectionError, APITimeoutError) as exc:
                 last_exc = exc
                 if attempt < self._cfg.max_retries - 1:
@@ -80,6 +88,8 @@ class DeepSeekClient:
                         yield delta.content
                 return
 
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                raise self._safe_error(exc)
             except (APIConnectionError, APITimeoutError) as exc:
                 last_exc = exc
                 if attempt < self._cfg.max_retries - 1:
@@ -171,6 +181,8 @@ class DeepSeekClient:
                 }
                 return
 
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                raise self._safe_error(exc)
             except (APIConnectionError, APITimeoutError) as exc:
                 last_exc = exc
                 if attempt < self._cfg.max_retries - 1:

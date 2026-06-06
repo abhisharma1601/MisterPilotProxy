@@ -34,9 +34,9 @@ class ApprovalRegistry:
         event.set()
         return True
 
-    async def wait_for(self, pending_id: str, timeout: float = 300.0) -> Optional[Any]:
+    async def wait_for(self, pending_id: str, timeout: Optional[float] = 300.0) -> Optional[Any]:
         """
-        Suspend until resolved or timeout.
+        Suspend until resolved. Pass timeout=None to wait indefinitely.
         Cleans up internal state in all cases.
         """
         event = self._events.get(pending_id)
@@ -44,7 +44,10 @@ class ApprovalRegistry:
             return None
 
         try:
-            await asyncio.wait_for(event.wait(), timeout=timeout)
+            if timeout is None:
+                await event.wait()
+            else:
+                await asyncio.wait_for(event.wait(), timeout=timeout)
         except asyncio.TimeoutError:
             pass
         finally:

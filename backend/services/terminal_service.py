@@ -1,11 +1,10 @@
 import asyncio
 import time
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
-_PENDING_TTL_SECONDS = 120   # approval window: 2 minutes
 _MAX_OUTPUT_BYTES = 50_000   # cap stdout/stderr at 50 KB each
 _DEFAULT_TIMEOUT = 30        # command execution timeout in seconds
 
@@ -15,10 +14,6 @@ class PendingCommand:
     id: str
     command: str
     workspace_root: str
-    created_at: float = field(default_factory=time.monotonic)
-
-    def is_expired(self) -> bool:
-        return (time.monotonic() - self.created_at) > _PENDING_TTL_SECONDS
 
 
 @dataclass
@@ -63,12 +58,6 @@ class TerminalService:
     def __init__(self) -> None:
         self._pending: Dict[str, PendingCommand] = {}
 
-    # ── internal ──────────────────────────────────────────────────────────────
-
-    def _prune_expired(self) -> None:
-        for k in [k for k, v in self._pending.items() if v.is_expired()]:
-            del self._pending[k]
-
     # ── stage ─────────────────────────────────────────────────────────────────
 
     def stage(self, command: str, workspace_root: str) -> PendingCommand:
@@ -87,8 +76,6 @@ class TerminalService:
             raise NotADirectoryError(
                 f"Workspace root is not a directory: {workspace_root!r}"
             )
-
-        self._prune_expired()
 
         cmd = PendingCommand(
             id=str(uuid.uuid4()),
@@ -122,9 +109,6 @@ class TerminalService:
         cmd = self._pending.pop(cmd_id, None)
         if cmd is None:
             raise KeyError(f"Pending command not found: {cmd_id!r}")
-
-        if cmd.is_expired():
-            raise TimeoutError(f"Pending command expired: {cmd_id!r}")
 
         if not approved:
             return ExecutionResult(

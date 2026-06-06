@@ -1,9 +1,15 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
+from ...logging_config import log_pii_findings
 from ...services.approval_registry import get_approval_registry
+from ...services.pii_service import get_pii_pipeline
 from ...services.terminal_service import get_terminal_service
+
+log = logging.getLogger("terminal")
 
 router = APIRouter()
 
@@ -48,9 +54,14 @@ async def stage_command(req: StageRequest) -> StageResponse:
     Does NOT execute anything — the command only runs after /execute is called
     with approved=true.
     """
+    pipeline = get_pii_pipeline()
+    sanitized_command, findings = pipeline.redact(req.command)
+    if findings:
+        log_pii_findings(log, "/terminal/stage", findings)
+
     svc = get_terminal_service()
     try:
-        cmd = svc.stage(req.command, req.workspace_root)
+        cmd = svc.stage(sanitized_command, req.workspace_root)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     except NotADirectoryError as exc:
@@ -79,13 +90,20 @@ async def execute_command(req: ExecuteRequest) -> ExecuteResponse:
     except TimeoutError as exc:
         raise HTTPException(status_code=410, detail=str(exc))
 
+    pipeline = get_pii_pipeline()
+    stdout, stdout_findings = pipeline.redact(result.stdout)
+    stderr, stderr_findings = pipeline.redact(result.stderr)
+    all_findings = stdout_findings + stderr_findings
+    if all_findings:
+        log_pii_findings(log, "/terminal/execute (output)", all_findings)
+
     # Unblock any waiting agent coroutine
     get_approval_registry().resolve(
         req.id,
         {
             "approved": result.approved,
-            "stdout": result.stdout,
-            "stderr": result.stderr,
+            "stdout": stdout,
+            "stderr": stderr,
             "exit_code": result.exit_code,
             "duration_ms": result.duration_ms,
             "timed_out": result.timed_out,
@@ -96,8 +114,8 @@ async def execute_command(req: ExecuteRequest) -> ExecuteResponse:
         id=result.id,
         command=result.command,
         approved=result.approved,
-        stdout=result.stdout,
-        stderr=result.stderr,
+        stdout=stdout,
+        stderr=stderr,
         exit_code=result.exit_code,
         duration_ms=result.duration_ms,
         timed_out=result.timed_out,
