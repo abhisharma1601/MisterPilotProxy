@@ -45,7 +45,6 @@ export type ExtensionMessage =
   | { type: 'cost'; usd: number }
   | { type: 'workspaceRoot'; path: string | null }
   | { type: 'apiKeyStatus'; isSet: boolean }
-  | { type: 'backendUrlStatus'; url: string }
   // edit
   | { type: 'pendingEdit'; editId: string; path: string; diff: string; original: string; proposed: string; isNewFile: boolean }
   | { type: 'editApplied'; editId: string; path: string }
@@ -65,7 +64,6 @@ export type WebviewMessage =
   | { type: 'clearHistory' }
   | { type: 'stopChat' }
   | { type: 'setApiKey' }
-  | { type: 'setBackendUrl' }
   | { type: 'applyEdit'; editId: string }
   | { type: 'rejectEdit'; editId: string }
   | { type: 'viewDiff'; path: string; original: string; proposed: string }

@@ -35,6 +35,7 @@ node_modules/
 extension/out/
 extension/webview-dist/
 extension/polyfill-file.js
+extension/src/config.generated.ts
 *.vsix
 
 # OS

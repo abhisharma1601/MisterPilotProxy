@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { BACKEND_URL } from './config.generated';
 import type { WebviewMessage } from './types';
 
 function getNonce(): string {
@@ -33,7 +34,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
           this._postWorkspaceRoot(view.webview);
           await this._postApiKeyStatus(view.webview);
-          this._postBackendUrlStatus(view.webview);
           break;
         case 'chat':
           await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
@@ -43,9 +43,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'setApiKey':
           await this._promptAndSaveApiKey(view.webview);
-          break;
-        case 'setBackendUrl':
-          await this._promptAndSaveBackendUrl(view.webview);
           break;
         case 'applyEdit':
           await this._applyEdit(msg.editId, view.webview);
@@ -65,12 +62,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   // ── helpers ──────────────────────────────────────────────────────────────
 
-  private _backendUrl(): string {
-    return vscode.workspace
-      .getConfiguration('misterpilot')
-      .get<string>('backendUrl', 'http://localhost:8000');
-  }
-
   private _postWorkspaceRoot(webview: vscode.Webview): void {
     const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
     webview.postMessage({ type: 'workspaceRoot', path: root });
@@ -79,12 +70,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async _postApiKeyStatus(webview: vscode.Webview): Promise<void> {
     const key = await this._context.secrets.get('misterpilot.apiKey');
     webview.postMessage({ type: 'apiKeyStatus', isSet: !!key });
-  }
-
-  private _postBackendUrlStatus(webview: vscode.Webview): void {
-    const cfg = vscode.workspace.getConfiguration('misterpilot').inspect<string>('backendUrl');
-    const explicitly = cfg?.globalValue ?? cfg?.workspaceValue ?? cfg?.workspaceFolderValue;
-    webview.postMessage({ type: 'backendUrlStatus', url: explicitly ?? null });
   }
 
   private async _promptAndSaveApiKey(webview: vscode.Webview): Promise<void> {
@@ -104,25 +89,6 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       webview.postMessage({ type: 'apiKeyStatus', isSet: true });
       vscode.window.showInformationMessage('MisterPilot: API key saved.');
     }
-  }
-
-  private async _promptAndSaveBackendUrl(webview: vscode.Webview): Promise<void> {
-    const current = this._backendUrl();
-    const url = await vscode.window.showInputBox({
-      prompt: 'Enter the MisterPilot backend URL',
-      placeHolder: 'http://localhost:8000',
-      value: current,
-      ignoreFocusOut: true,
-      validateInput: (v) => {
-        try { new URL(v); return null; } catch { return 'Enter a valid URL (e.g. http://localhost:8000)'; }
-      },
-    });
-    if (url === undefined) return;
-    await vscode.workspace
-      .getConfiguration('misterpilot')
-      .update('backendUrl', url, vscode.ConfigurationTarget.Global);
-    this._postBackendUrlStatus(webview);
-    vscode.window.showInformationMessage(`MisterPilot: Backend URL set to ${url}`);
   }
 
   // ── chat + streaming ──────────────────────────────────────────────────────
@@ -145,7 +111,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
       if (apiKey) headers['X-Api-Key'] = apiKey;
 
-      const res = await fetch(`${this._backendUrl()}/agent/stream`, {
+      const res = await fetch(`${BACKEND_URL}/agent/stream`, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
@@ -249,7 +215,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async _applyEdit(editId: string, webview: vscode.Webview): Promise<void> {
     try {
-      const res = await fetch(`${this._backendUrl()}/edit/apply`, {
+      const res = await fetch(`${BACKEND_URL}/edit/apply`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: editId }),
@@ -272,7 +238,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async _rejectEdit(editId: string, webview: vscode.Webview): Promise<void> {
     try {
-      const res = await fetch(`${this._backendUrl()}/edit/reject`, {
+      const res = await fetch(`${BACKEND_URL}/edit/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: editId }),
@@ -311,7 +277,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   ): Promise<void> {
     let command = '';
     try {
-      const info = await fetch(`${this._backendUrl()}/terminal/pending/${id}`);
+      const info = await fetch(`${BACKEND_URL}/terminal/pending/${id}`);
       if (info.ok) {
         const d = await info.json() as { command: string };
         command = d.command;
@@ -319,7 +285,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     } catch { /* best-effort */ }
 
     try {
-      const res = await fetch(`${this._backendUrl()}/terminal/execute`, {
+      const res = await fetch(`${BACKEND_URL}/terminal/execute`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id, approved }),

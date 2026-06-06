@@ -36,27 +36,14 @@
       {
         "command": "misterpilot.setApiKey",
         "title": "MisterPilot: Set API Key"
-      },
-      {
-        "command": "misterpilot.setBackendUrl",
-        "title": "MisterPilot: Set Backend URL"
       }
-    ],
-    "configuration": {
-      "title": "MisterPilot",
-      "properties": {
-        "misterpilot.backendUrl": {
-          "type": "string",
-          "default": "http://localhost:8000",
-          "description": "URL of the MisterPilot FastAPI backend"
-        }
-      }
-    }
+    ]
   },
   "scripts": {
     "vscode:prepublish": "npm run build:all",
     "build:all": "npm run build:webview && npm run build:ext",
     "build:webview": "cd webview && npm install && npm run build",
+    "prebuild:ext": "node scripts/gen-config.js",
     "build:ext": "tsc -p .",
     "watch:ext": "tsc -watch -p .",
     "watch:webview": "cd webview && npm run dev",

@@ -19,7 +19,6 @@ export function ChatPanel() {
   const [streaming, setStreaming] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
-  const [backendUrl, setBackendUrl] = useState<string | null>(null);
   const [model, setModel] = useState('deepseek-v4-pro');
   const [mode, setMode] = useState<'agent' | 'ask'>('agent');
   const [sessionCost, setSessionCost] = useState(0);
@@ -49,10 +48,6 @@ export function ChatPanel() {
 
         case 'apiKeyStatus':
           setApiKeySet(msg.isSet);
-          break;
-
-        case 'backendUrlStatus':
-          setBackendUrl(msg.url);
           break;
 
         // chat streaming
@@ -316,10 +311,6 @@ export function ChatPanel() {
     postToExtension({ type: 'setApiKey' });
   }, []);
 
-  const handleSetBackendUrl = useCallback(() => {
-    postToExtension({ type: 'setBackendUrl' });
-  }, []);
-
   // ── edit actions ────────────────────────────────────────────────────────
 
   const handleApply = useCallback((editId: string) => {
@@ -360,14 +351,6 @@ export function ChatPanel() {
             📁 {folderName}
           </span>
         )}
-        <button
-          className="chat-panel__icon-btn"
-          onClick={handleSetBackendUrl}
-          title={backendUrl ? `Backend: ${backendUrl}` : 'Set backend URL'}
-          aria-label="Set backend URL"
-        >
-          🌐
-        </button>
         <button
           className="chat-panel__icon-btn"
           onClick={handleSetApiKey}
@@ -426,15 +409,6 @@ export function ChatPanel() {
           {' '}or run <code>MisterPilot: Set API Key</code> from the command palette.
         </div>
       )}
-      {!backendUrl && (
-        <div className="api-key-banner">
-          No backend URL configured.{' '}
-          <button className="api-key-banner__btn" onClick={handleSetBackendUrl}>
-            Set URL
-          </button>
-        </div>
-      )}
-
       <div className="chat-panel__messages">
         <MessageList
           messages={messages}
