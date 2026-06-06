@@ -20,6 +20,8 @@ export function ChatPanel() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
   const [backendUrl, setBackendUrl] = useState<string | null>(null);
+  const [model, setModel] = useState('deepseek-v4-pro');
+  const [mode, setMode] = useState<'agent' | 'ask'>('agent');
 
   // Tracks the full LLM conversation in OpenAI format for multi-turn tool use
   const llmHistoryRef = useRef<Record<string, unknown>[]>([]);
@@ -285,9 +287,11 @@ export function ChatPanel() {
       postToExtension({
         type: 'chat',
         messages: llmHistoryRef.current,
+        model,
+        mode,
       });
     },
-    [streaming]
+    [streaming, model, mode]
   );
 
   const handleStop = useCallback(() => {
@@ -368,6 +372,37 @@ export function ChatPanel() {
         <button className="chat-panel__icon-btn" onClick={handleClear} aria-label="Clear history">
           🗑
         </button>
+      </div>
+
+      <div className="chat-panel__toolbar">
+        <select
+          className="model-select"
+          value={model}
+          onChange={(e) => setModel(e.target.value)}
+          disabled={streaming}
+          title="Select model"
+        >
+          <option value="deepseek-v4-pro">deepseek-v4-pro</option>
+          <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+        </select>
+        <div className="mode-toggle">
+          <button
+            className={`mode-toggle__btn ${mode === 'agent' ? 'mode-toggle__btn--active' : ''}`}
+            onClick={() => setMode('agent')}
+            disabled={streaming}
+            title="Agent mode: can read, write files and run commands"
+          >
+            Agent
+          </button>
+          <button
+            className={`mode-toggle__btn ${mode === 'ask' ? 'mode-toggle__btn--active' : ''}`}
+            onClick={() => setMode('ask')}
+            disabled={streaming}
+            title="Ask mode: read-only, no file changes or commands"
+          >
+            Ask
+          </button>
+        </div>
       </div>
 
       {apiKeySet === false && (

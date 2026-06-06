@@ -14,6 +14,8 @@ log = logging.getLogger("agent")
 
 router = APIRouter()
 
+AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
+
 
 class AgentMessage(BaseModel):
     role: str
@@ -27,6 +29,13 @@ class AgentMessage(BaseModel):
 class AgentRequest(BaseModel):
     messages: List[AgentMessage]
     workspace_root: Optional[str] = None
+    model: Optional[str] = None
+    mode: str = "agent"  # "agent" | "ask"
+
+
+@router.get("/models")
+async def list_models() -> Dict[str, List[str]]:
+    return {"models": AVAILABLE_MODELS}
 
 
 @router.post("/stream")
@@ -48,11 +57,15 @@ async def agent_stream(
             msg["content"] = sanitized
         messages.append(msg)
 
+    model = request.model if request.model in AVAILABLE_MODELS else None
+    mode = request.mode if request.mode in ("agent", "ask") else "agent"
     usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
 
     async def generate():
         try:
-            async for event in react_agent.run(messages, request.workspace_root, api_key=x_api_key):
+            async for event in react_agent.run(
+                messages, request.workspace_root, api_key=x_api_key, model=model, mode=mode
+            ):
                 if event.get("type") == "usage":
                     usage["prompt_tokens"] = event.get("prompt_tokens", 0)
                     usage["completion_tokens"] = event.get("completion_tokens", 0)
@@ -65,7 +78,8 @@ async def agent_stream(
             yield {"data": json.dumps({"type": "done"})}
         finally:
             log.info(
-                "[STREAM] POST /agent/stream  redacted=%d  out=%d in=%d",
+                "[STREAM] POST /agent/stream  mode=%s  model=%s  redacted=%d  out=%d in=%d",
+                mode, model or "default",
                 len(all_findings), usage["prompt_tokens"], usage["completion_tokens"],
             )
 

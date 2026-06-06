@@ -29,7 +29,7 @@ from ..tools.search_tools import search_code
 log = logging.getLogger(__name__)
 
 
-TOOLS: List[Dict[str, Any]] = [
+AGENT_TOOLS: List[Dict[str, Any]] = [
     {
         "type": "function",
         "function": {
@@ -158,19 +158,33 @@ TOOLS: List[Dict[str, Any]] = [
 ]
 
 
-def _build_system(workspace_root: Optional[str]) -> str:
-    parts = [
-        "You are MisterPilot, an AI coding assistant running inside VS Code.",
-        "You answer questions about code, explain concepts, and help implement changes.",
-        "",
-        "Available tools:",
-        "  read_file, list_files, search_code — read freely, no approval needed",
-        "  write_file, replace_in_file        — shows a diff, requires user approval",
-        "  execute_terminal                   — shows the command, requires user approval",
-        "",
-        "Always read relevant files before suggesting or making changes.",
-        "Explain what you are doing before each tool call.",
-    ]
+def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
+    if mode == "ask":
+        parts = [
+            "You are MisterPilot, an AI coding assistant running inside VS Code.",
+            "You are in Ask mode: answer questions, explain concepts, and read files when helpful.",
+            "You MUST NOT create, modify, or delete any files.",
+            "You MUST NOT run any terminal commands.",
+            "",
+            "Available tools (read-only):",
+            "  read_file, list_files, search_code — use freely to look up code",
+            "",
+            "If the user asks you to make changes, explain clearly what changes would be needed "
+            "but do not attempt to write or modify anything.",
+        ]
+    else:
+        parts = [
+            "You are MisterPilot, an AI coding assistant running inside VS Code.",
+            "You answer questions about code, explain concepts, and help implement changes.",
+            "",
+            "Available tools:",
+            "  read_file, list_files, search_code — read freely, no approval needed",
+            "  write_file, replace_in_file        — shows a diff, requires user approval",
+            "  execute_terminal                   — shows the command, requires user approval",
+            "",
+            "Always read relevant files before suggesting or making changes.",
+            "Explain what you are doing before each tool call.",
+        ]
     if workspace_root:
         parts.append(f"\nWorkspace root: {workspace_root}")
     else:
@@ -336,10 +350,19 @@ async def _execute_tool(
         yield {"type": "_result", "content": f"Tool error ({name}): {exc}"}
 
 
+# Read-only subset of tools used in Ask mode
+ASK_TOOLS: List[Dict[str, Any]] = [
+    t for t in AGENT_TOOLS
+    if t["function"]["name"] in ("read_file", "list_files", "search_code")
+]
+
+
 async def run(
     messages: List[Dict[str, Any]],
     workspace_root: Optional[str],
     api_key: Optional[str] = None,
+    model: Optional[str] = None,
+    mode: str = "agent",
 ) -> AsyncIterator[Dict[str, Any]]:
     """
     Main ReAct loop.  Yields SSE-compatible event dicts:
@@ -371,8 +394,10 @@ async def run(
         else:
             clean_messages.append(msg)
 
+    tools = AGENT_TOOLS if mode == "agent" else ASK_TOOLS
+
     context: List[Dict[str, Any]] = [
-        {"role": "system", "content": _build_system(workspace_root)},
+        {"role": "system", "content": _build_system(workspace_root, mode)},
         *clean_messages,
     ]
 
@@ -388,8 +413,8 @@ async def run(
         try:
             async for event in llm.stream_with_tools(
                 context,
-                tools=TOOLS,
-                model=cfg.deepseek.model,
+                tools=tools,
+                model=model or cfg.deepseek.model,
                 temperature=0.3,
             ):
                 if event["type"] == "content_chunk":

@@ -4,7 +4,7 @@ export interface ChatMessage {
 }
 
 export type WebviewMessage =
-  | { type: 'chat'; messages: Record<string, unknown>[] }
+  | { type: 'chat'; messages: Record<string, unknown>[]; model: string; mode: 'agent' | 'ask' }
   | { type: 'ready' }
   | { type: 'clearHistory' }
   | { type: 'stopChat' }
