@@ -412,8 +412,10 @@ async def run(
         *clean_messages,
     ]
 
-    total_prompt_tokens = 0
-    total_completion_tokens = 0
+    total_output_tokens = 0
+    total_cache_hit_tokens = 0
+    total_cache_miss_tokens = 0
+    resolved_model = model or cfg.deepseek.model
 
     while True:
         # ── LLM call (streaming) ─────────────────────────────────────────────
@@ -425,7 +427,7 @@ async def run(
             async for event in llm.stream_with_tools(
                 context,
                 tools=tools,
-                model=model or cfg.deepseek.model,
+                model=resolved_model,
                 temperature=0.3,
             ):
                 if event["type"] == "content_chunk":
@@ -435,8 +437,13 @@ async def run(
                     tool_calls = event["tool_calls"]
                     finish_reason = event["finish_reason"]
                     if event["usage"]:
-                        total_prompt_tokens += event["usage"].prompt_tokens
-                        total_completion_tokens += event["usage"].completion_tokens
+                        u = event["usage"]
+                        cached = 0
+                        if hasattr(u, "prompt_tokens_details") and u.prompt_tokens_details:
+                            cached = getattr(u.prompt_tokens_details, "cached_tokens", 0) or 0
+                        total_cache_hit_tokens += cached
+                        total_cache_miss_tokens += max(0, u.prompt_tokens - cached)
+                        total_output_tokens += u.completion_tokens
         except Exception as exc:  # noqa: BLE001
             yield {"type": "error", "message": _sanitize_err(f"LLM error: {exc}", api_key)}
             yield {"type": "done"}
@@ -444,7 +451,13 @@ async def run(
 
         # ── Final answer ──────────────────────────────────────────────────────
         if finish_reason == "stop" or not tool_calls:
-            yield {"type": "usage", "prompt_tokens": total_prompt_tokens, "completion_tokens": total_completion_tokens}
+            yield {
+                "type": "usage",
+                "model": resolved_model,
+                "output_tokens": total_output_tokens,
+                "cache_hit_tokens": total_cache_hit_tokens,
+                "cache_miss_tokens": total_cache_miss_tokens,
+            }
             yield {"type": "done"}
             return
 

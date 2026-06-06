@@ -239,6 +239,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           content: String(payload.content ?? ''),
         });
         break;
+      case 'cost':
+        webview.postMessage({ type: 'cost', usd: Number(payload.usd ?? 0) });
+        break;
     }
   }
 

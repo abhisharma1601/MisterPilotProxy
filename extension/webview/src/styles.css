@@ -176,6 +176,15 @@ body {
   cursor: not-allowed;
 }
 
+.session-cost {
+  margin-left: auto;
+  font-size: 10px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  color: var(--vscode-descriptionForeground, #888);
+  white-space: nowrap;
+  opacity: 0.8;
+}
+
 /* ── API key banner ──────────────────────────────── */
 
 .api-key-banner {
