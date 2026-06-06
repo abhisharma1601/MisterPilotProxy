@@ -1,11 +1,35 @@
+from fnmatch import fnmatch
 from pathlib import Path
 
 # 1 MB — refuse to read larger files to protect context window and memory
 MAX_READ_BYTES = 1_000_000
 
+# Filename/glob patterns that must never be sent to the LLM.
+# Matched against the bare filename (case-insensitive).
+BLOCKED_FILENAME_PATTERNS = {
+    # Environment / secrets
+    ".env", ".env.*", "*.env",
+    # Private keys & certificates
+    "*.pem", "*.key", "*.p12", "*.pfx", "*.crt", "*.cer", "*.der",
+    "id_rsa", "id_rsa.*", "id_ed25519", "id_ed25519.*",
+    "id_ecdsa", "id_ecdsa.*", "id_dsa", "id_dsa.*",
+    # Common secret/credential file names
+    "secrets", "secrets.*", "*.secrets",
+    "credentials", "credentials.*",
+    ".netrc", ".pgpass",
+    # Token / auth files
+    "*.token", "*.tokens",
+    # Password stores / keystores
+    "*.jks", "*.keystore",
+}
+
 
 class PathTraversalError(PermissionError):
     """Raised when a requested path escapes the workspace root."""
+
+
+class BlockedFileError(PermissionError):
+    """Raised when a file matches the sensitive-file blocklist."""
 
 
 def _safe_resolve(root: str, path: str) -> Path:
@@ -47,6 +71,12 @@ def read_file(root: str, path: str) -> str:
         ValueError          — file exceeds MAX_READ_BYTES
     """
     resolved = _safe_resolve(root, path)
+
+    name_lower = resolved.name.lower()
+    if any(fnmatch(name_lower, pat.lower()) for pat in BLOCKED_FILENAME_PATTERNS):
+        raise BlockedFileError(
+            f"Reading {path!r} is blocked — this file may contain secrets."
+        )
 
     if not resolved.exists():
         raise FileNotFoundError(f"No such file: {path!r}")

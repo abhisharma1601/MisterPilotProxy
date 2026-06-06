@@ -16,6 +16,25 @@ router = APIRouter()
 
 AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 
+# Per-token prices in USD, derived from DeepSeek billing data
+PRICING: dict = {
+    "deepseek-v4-pro": {
+        "output":    0.00000087,
+        "cache_hit": 0.000000003625,
+        "cache_miss": 0.000000435,
+    },
+    "deepseek-v4-flash": {
+        "output":    0.00000028,
+        "cache_hit": 0.0000000028,
+        "cache_miss": 0.00000014,
+    },
+}
+
+
+def _calc_cost(model: str, output: int, cache_hit: int, cache_miss: int) -> float:
+    p = PRICING.get(model, PRICING["deepseek-v4-pro"])
+    return output * p["output"] + cache_hit * p["cache_hit"] + cache_miss * p["cache_miss"]
+
 
 class AgentMessage(BaseModel):
     role: str
@@ -67,8 +86,15 @@ async def agent_stream(
                 messages, request.workspace_root, api_key=x_api_key, model=model, mode=mode
             ):
                 if event.get("type") == "usage":
-                    usage["prompt_tokens"] = event.get("prompt_tokens", 0)
-                    usage["completion_tokens"] = event.get("completion_tokens", 0)
+                    usage["prompt_tokens"] = event.get("cache_hit_tokens", 0) + event.get("cache_miss_tokens", 0)
+                    usage["completion_tokens"] = event.get("output_tokens", 0)
+                    cost_usd = _calc_cost(
+                        event.get("model", mode),
+                        event.get("output_tokens", 0),
+                        event.get("cache_hit_tokens", 0),
+                        event.get("cache_miss_tokens", 0),
+                    )
+                    yield {"data": json.dumps({"type": "cost", "usd": cost_usd})}
                     continue
                 yield {"data": json.dumps(event)}
                 if event.get("type") == "done":

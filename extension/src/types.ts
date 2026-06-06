@@ -19,6 +19,7 @@ export type ExtensionMessage =
   | { type: 'chunk'; content: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
+  | { type: 'cost'; usd: number }
   | { type: 'workspaceRoot'; path: string | null }
   | { type: 'apiKeyStatus'; isSet: boolean }
   | { type: 'backendUrlStatus'; url: string }

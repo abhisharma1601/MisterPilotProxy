@@ -22,6 +22,8 @@ export function ChatPanel() {
   const [backendUrl, setBackendUrl] = useState<string | null>(null);
   const [model, setModel] = useState('deepseek-v4-pro');
   const [mode, setMode] = useState<'agent' | 'ask'>('agent');
+  const [sessionCost, setSessionCost] = useState(0);
+  const INR_RATE = 96;
 
   // Tracks the full LLM conversation in OpenAI format for multi-turn tool use
   const llmHistoryRef = useRef<Record<string, unknown>[]>([]);
@@ -96,6 +98,10 @@ export function ChatPanel() {
             }
             return [...updated, { id: uid(), role: 'assistant', content: `**Error:** ${msg.message}` }];
           });
+          break;
+
+        case 'cost':
+          setSessionCost((prev) => prev + msg.usd);
           break;
 
         // file edits
@@ -302,6 +308,7 @@ export function ChatPanel() {
     setMessages([]);
     llmHistoryRef.current = [];
     pendingTurnRef.current = { content: '', toolCalls: [] };
+    setSessionCost(0);
     postToExtension({ type: 'clearHistory' });
   }, []);
 
@@ -403,6 +410,11 @@ export function ChatPanel() {
             Ask
           </button>
         </div>
+        {sessionCost > 0 && (
+          <span className="session-cost" title="Session cost (resets on clear)">
+            ${sessionCost.toFixed(4)} / ₹{(sessionCost * INR_RATE).toFixed(2)}
+          </span>
+        )}
       </div>
 
       {apiKeySet === false && (

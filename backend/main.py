@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from . import __version__
 from .config import get_config
 from .logging_config import setup_logging
 from .api.routes import chat, workspace, edit, terminal, agent
@@ -20,7 +21,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="MisterPilot API",
         description="AI coding assistant backend",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
 

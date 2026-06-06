@@ -2,12 +2,15 @@ import difflib
 import time
 import uuid
 from dataclasses import dataclass, field
+from fnmatch import fnmatch
 from typing import Dict, Optional
 
 from ..tools.file_tools import (
     _safe_resolve,
     read_file,
     write_file,
+    BLOCKED_FILENAME_PATTERNS,
+    BlockedFileError,
     PathTraversalError,
 )
 
@@ -67,7 +70,13 @@ class EditService:
             PathTraversalError  — path escapes root
             ValueError          — content is identical to current file
         """
-        _safe_resolve(root, path)  # raises PathTraversalError if unsafe
+        resolved = _safe_resolve(root, path)  # raises PathTraversalError if unsafe
+
+        name_lower = resolved.name.lower()
+        if any(fnmatch(name_lower, pat.lower()) for pat in BLOCKED_FILENAME_PATTERNS):
+            raise BlockedFileError(
+                f"Writing {path!r} is blocked — this file may contain secrets."
+            )
 
         try:
             original = read_file(root, path)
@@ -102,7 +111,14 @@ class EditService:
             FileNotFoundError   — file does not exist
             ValueError          — old_text not found in file
         """
-        _safe_resolve(root, path)
+        resolved = _safe_resolve(root, path)
+
+        name_lower = resolved.name.lower()
+        if any(fnmatch(name_lower, pat.lower()) for pat in BLOCKED_FILENAME_PATTERNS):
+            raise BlockedFileError(
+                f"Writing {path!r} is blocked — this file may contain secrets."
+            )
+
         original = read_file(root, path)  # may raise FileNotFoundError
 
         if old_text not in original:
