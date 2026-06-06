@@ -4,12 +4,12 @@ ReAct agent loop.
 Each iteration:
   1. Call LLM (non-streaming, tool_choice=auto)
   2. Yield any model prose as chunks
-  3. If finish_reason=tool_calls  → execute each tool, loop
+  3. If finish_reason=tool_calls  → delegate each tool to the extension, loop
   4. If finish_reason=stop        → done
 
-Approval-required tools (write_file, replace_in_file, execute_terminal) register
-with ApprovalRegistry before yielding their SSE event, then await the registry
-until the extension calls /edit/apply, /edit/reject, or /terminal/execute.
+All tool execution happens locally in the VS Code extension (which has
+filesystem and terminal access). The backend yields a tool_call_request SSE
+event and awaits the result via POST /agent/tool_result + ApprovalRegistry.
 """
 
 import json
@@ -19,12 +19,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ..config import get_config
 from ..llm.deepseek_client import get_deepseek_client
 from ..services.approval_registry import get_approval_registry
-from ..services.edit_service import get_edit_service
 from ..services.pii_service import get_pii_pipeline
-from ..services.terminal_service import get_terminal_service
-from ..services.workspace import list_files
-from ..tools.file_tools import read_file, BlockedFileError, PathTraversalError
-from ..tools.search_tools import search_code
 
 log = logging.getLogger(__name__)
 
@@ -202,10 +197,14 @@ async def _execute_tool(
     call_id: str,
 ) -> AsyncIterator[Dict[str, Any]]:
     """
-    Async generator that executes one tool call.
+    Delegate all tool execution to the VS Code extension via SSE.
 
-    Yields zero or more SSE-style events (pending_edit, pending_terminal),
-    then exactly one {"type": "_result", "content": str} as the last item.
+    The extension has local filesystem and terminal access; the backend only
+    does LLM inference. Flow:
+      1. Register call_id in ApprovalRegistry
+      2. Yield tool_call_request → extension executes locally
+      3. Extension calls POST /agent/tool_result to unblock the registry
+      4. Yield the result content back to the agent loop
     """
     if workspace_root is None and name in (
         "read_file", "list_files", "search_code",
@@ -214,144 +213,12 @@ async def _execute_tool(
         yield {"type": "_result", "content": "No workspace is open — file tools are unavailable."}
         return
 
-    try:
-        if name == "read_file":
-            path = args.get("path", "")
-            try:
-                raw = read_file(workspace_root, path)  # type: ignore[arg-type]
-            except BlockedFileError as exc:
-                yield {"type": "_result", "content": str(exc)}
-                return
-            lines = raw.splitlines()
-            numbered = "\n".join(f"{i + 1}: {l}" for i, l in enumerate(lines[:150]))
-            suffix = f"\n... ({len(lines) - 150} more lines)" if len(lines) > 150 else ""
-            yield {"type": "_result", "content": numbered + suffix}
-
-        elif name == "list_files":
-            files = list_files(workspace_root)  # type: ignore[arg-type]
-            body = "\n".join(files[:300])
-            suffix = f"\n... ({len(files) - 300} more files)" if len(files) > 300 else ""
-            yield {"type": "_result", "content": body + suffix or "(empty workspace)"}
-
-        elif name == "search_code":
-            query = args.get("query", "")
-            file_pattern = args.get("file_pattern")
-            case_sensitive = bool(args.get("case_sensitive", False))
-            matches, _ = await search_code(
-                workspace_root,  # type: ignore[arg-type]
-                query,
-                case_sensitive=case_sensitive,
-                file_pattern=file_pattern,
-                max_results=50,
-            )
-            if not matches:
-                yield {"type": "_result", "content": f"No matches found for: {query!r}"}
-            else:
-                lines = [f"{m.file}:{m.line}: {m.content}" for m in matches]
-                yield {
-                    "type": "_result",
-                    "content": f"{len(matches)} match(es):\n" + "\n".join(lines),
-                }
-
-        elif name == "write_file":
-            path = args.get("path", "")
-            content = args.get("content", "")
-            edit_svc = get_edit_service()
-            registry = get_approval_registry()
-
-            try:
-                edit = edit_svc.preview_write(workspace_root, path, content)  # type: ignore[arg-type]
-            except (PathTraversalError, ValueError) as exc:
-                yield {"type": "_result", "content": f"Cannot stage write: {exc}"}
-                return
-
-            registry.register(edit.id)
-            yield {
-                "type": "pending_edit",
-                "id": edit.id,
-                "path": edit.path,
-                "diff": edit.diff(),
-                "original": edit.original,
-                "proposed": edit.proposed,
-                "is_new_file": edit.is_new_file,
-            }
-
-            result = await registry.wait_for(edit.id, timeout=300.0)
-            if result and result.get("applied"):
-                yield {"type": "_result", "content": f"File written: {path}"}
-            else:
-                yield {"type": "_result", "content": f"Edit rejected by user: {path}"}
-
-        elif name == "replace_in_file":
-            path = args.get("path", "")
-            old_text = args.get("old_text", "")
-            new_text = args.get("new_text", "")
-            edit_svc = get_edit_service()
-            registry = get_approval_registry()
-
-            try:
-                edit = edit_svc.preview_replace(workspace_root, path, old_text, new_text)  # type: ignore[arg-type]
-            except (PathTraversalError, FileNotFoundError, ValueError) as exc:
-                yield {"type": "_result", "content": f"Cannot stage replacement: {exc}"}
-                return
-
-            registry.register(edit.id)
-            yield {
-                "type": "pending_edit",
-                "id": edit.id,
-                "path": edit.path,
-                "diff": edit.diff(),
-                "original": edit.original,
-                "proposed": edit.proposed,
-                "is_new_file": edit.is_new_file,
-            }
-
-            result = await registry.wait_for(edit.id, timeout=300.0)
-            if result and result.get("applied"):
-                yield {"type": "_result", "content": f"Replacement applied: {path}"}
-            else:
-                yield {"type": "_result", "content": f"Replacement rejected by user: {path}"}
-
-        elif name == "execute_terminal":
-            command = args.get("command", "")
-            terminal_svc = get_terminal_service()
-            registry = get_approval_registry()
-
-            try:
-                cmd = terminal_svc.stage(command, workspace_root)  # type: ignore[arg-type]
-            except (ValueError, NotADirectoryError) as exc:
-                yield {"type": "_result", "content": f"Cannot stage command: {exc}"}
-                return
-
-            registry.register(cmd.id)
-            yield {
-                "type": "pending_terminal",
-                "id": cmd.id,
-                "command": cmd.command,
-                "workspace_root": cmd.workspace_root,
-            }
-
-            result = await registry.wait_for(cmd.id, timeout=None)
-            if result is None:
-                yield {"type": "_result", "content": "Approval timed out — command was not executed."}
-            elif not result.get("approved"):
-                yield {"type": "_result", "content": f"Command denied by user: {command}"}
-            else:
-                parts: List[str] = []
-                if result.get("stdout"):
-                    parts.append(f"stdout:\n{result['stdout']}")
-                if result.get("stderr"):
-                    parts.append(f"stderr:\n{result['stderr']}")
-                parts.append(f"exit code: {result.get('exit_code', -1)}")
-                if result.get("timed_out"):
-                    parts.append("(timed out)")
-                yield {"type": "_result", "content": "\n".join(parts) or "(no output)"}
-
-        else:
-            yield {"type": "_result", "content": f"Unknown tool: {name!r}"}
-
-    except Exception as exc:  # noqa: BLE001
-        yield {"type": "_result", "content": f"Tool error ({name}): {exc}"}
+    registry = get_approval_registry()
+    registry.register(call_id)
+    yield {"type": "tool_call_request", "call_id": call_id, "tool": name, "args": args}
+    result = await registry.wait_for(call_id, timeout=300.0)
+    content = result.get("content", "") if result else f"Tool call timed out after 5 minutes: {name}"
+    yield {"type": "_result", "content": content}
 
 
 # Read-only subset of tools used in Ask mode

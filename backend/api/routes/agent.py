@@ -2,12 +2,13 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
 from ...agents import react_agent
 from ...logging_config import log_pii_findings
+from ...services.approval_registry import get_approval_registry
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("agent")
@@ -110,3 +111,24 @@ async def agent_stream(
             )
 
     return EventSourceResponse(generate())
+
+
+class ToolResultRequest(BaseModel):
+    call_id: str
+    content: str
+
+
+class ToolResultResponse(BaseModel):
+    ok: bool
+
+
+@router.post("/tool_result")
+async def submit_tool_result(req: ToolResultRequest) -> ToolResultResponse:
+    """
+    Called by the VS Code extension after it has executed a tool locally.
+    Unblocks the waiting agent coroutine in ApprovalRegistry.
+    """
+    resolved = get_approval_registry().resolve(req.call_id, {"content": req.content})
+    if not resolved:
+        raise HTTPException(status_code=404, detail=f"No pending tool call: {req.call_id!r}")
+    return ToolResultResponse(ok=True)

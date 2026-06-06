@@ -1,3 +1,5 @@
+import * as path from 'path';
+import { exec, ExecException } from 'child_process';
 import * as vscode from 'vscode';
 import { BACKEND_URL } from './config.generated';
 import type { WebviewMessage } from './types';
@@ -7,11 +9,17 @@ function getNonce(): string {
   return Array.from({ length: 32 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
+// Pending local file-write or terminal-execute operations keyed by callId.
+type PendingLocalOp =
+  | { kind: 'edit'; path: string; proposed: string; workspaceRoot: string }
+  | { kind: 'terminal'; command: string; workspaceRoot: string };
+
 export class SidebarProvider implements vscode.WebviewViewProvider {
   static readonly viewType = 'misterpilot.chat';
 
   private _view?: vscode.WebviewView;
   private _abortController: AbortController | null = null;
+  private _pendingLocalOps: Map<string, PendingLocalOp> = new Map();
 
   constructor(private readonly _context: vscode.ExtensionContext) {}
 
@@ -40,6 +48,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           break;
         case 'stopChat':
           this._abortController?.abort();
+          this._pendingLocalOps.clear();
           break;
         case 'setApiKey':
           await this._promptAndSaveApiKey(view.webview);
@@ -79,7 +88,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       password: true,
       ignoreFocusOut: true,
     });
-    if (key === undefined) return; // user cancelled
+    if (key === undefined) return;
     if (key === '') {
       await this._context.secrets.delete('misterpilot.apiKey');
       webview.postMessage({ type: 'apiKeyStatus', isSet: false });
@@ -171,24 +180,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'done':
         webview.postMessage({ type: 'done' });
         break;
-      case 'pending_edit':
-        webview.postMessage({
-          type: 'pendingEdit',
-          editId: payload.id,
-          path: payload.path,
-          diff: payload.diff,
-          original: payload.original,
-          proposed: payload.proposed,
-          isNewFile: payload.is_new_file ?? false,
+      case 'tool_call_request': {
+        // Backend asks extension to execute a tool locally (extension has filesystem access).
+        const callId = String(payload.call_id ?? '');
+        const tool = String(payload.tool ?? '');
+        const args = (payload.args ?? {}) as Record<string, unknown>;
+        void this._handleToolCallRequest(callId, tool, args, webview).catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          void this._submitToolResult(callId, `Tool handler error: ${msg}`);
         });
         break;
-      case 'pending_terminal':
-        webview.postMessage({
-          type: 'terminalPending',
-          id: String(payload.id ?? ''),
-          command: String(payload.command ?? ''),
-        });
-        break;
+      }
       case 'tool_call':
         webview.postMessage({
           type: 'toolCall',
@@ -211,9 +213,261 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // ── local tool execution ──────────────────────────────────────────────────
+
+  private async _handleToolCallRequest(
+    callId: string,
+    tool: string,
+    args: Record<string, unknown>,
+    webview: vscode.Webview
+  ): Promise<void> {
+    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
+
+    switch (tool) {
+      case 'read_file': {
+        const content = await this._localReadFile(workspaceRoot, String(args.path ?? ''));
+        await this._submitToolResult(callId, content);
+        break;
+      }
+      case 'list_files': {
+        const content = await this._localListFiles(workspaceRoot);
+        await this._submitToolResult(callId, content);
+        break;
+      }
+      case 'search_code': {
+        const content = await this._localSearchCode(
+          workspaceRoot,
+          String(args.query ?? ''),
+          args.file_pattern ? String(args.file_pattern) : undefined,
+          Boolean(args.case_sensitive ?? false)
+        );
+        await this._submitToolResult(callId, content);
+        break;
+      }
+      case 'write_file':
+        await this._localStagePendingEdit(
+          callId,
+          String(args.path ?? ''),
+          String(args.content ?? ''),
+          workspaceRoot,
+          webview
+        );
+        break;
+      case 'replace_in_file':
+        await this._localStageReplaceEdit(
+          callId,
+          String(args.path ?? ''),
+          String(args.old_text ?? ''),
+          String(args.new_text ?? ''),
+          workspaceRoot,
+          webview
+        );
+        break;
+      case 'execute_terminal':
+        await this._localStageTerminal(callId, String(args.command ?? ''), workspaceRoot, webview);
+        break;
+      default:
+        await this._submitToolResult(callId, `Unknown tool: ${tool}`);
+    }
+  }
+
+  private async _localReadFile(workspaceRoot: string | null, filePath: string): Promise<string> {
+    if (!workspaceRoot) return 'No workspace open';
+    const abs = this._safeLocalPath(workspaceRoot, filePath);
+    if (!abs) return 'Error: path traversal attempt blocked';
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
+      const raw = Buffer.from(bytes).toString('utf-8');
+      const lines = raw.split('\n');
+      const numbered = lines.slice(0, 150).map((l, i) => `${i + 1}: ${l}`).join('\n');
+      const suffix = lines.length > 150 ? `\n... (${lines.length - 150} more lines)` : '';
+      return numbered + suffix;
+    } catch (err) {
+      return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async _localListFiles(workspaceRoot: string | null): Promise<string> {
+    if (!workspaceRoot) return 'No workspace open';
+    try {
+      const pattern = new vscode.RelativePattern(workspaceRoot, '**/*');
+      const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/__pycache__/**,**/.venv/**,**/out/**}';
+      const files = await vscode.workspace.findFiles(pattern, exclude, 500);
+      const paths = files
+        .map(f => path.relative(workspaceRoot, f.fsPath))
+        .sort();
+      const body = paths.slice(0, 300).join('\n');
+      const suffix = paths.length > 300 ? `\n... (${paths.length - 300} more files)` : '';
+      return body + suffix || '(empty workspace)';
+    } catch (err) {
+      return `Error listing files: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async _localSearchCode(
+    workspaceRoot: string | null,
+    query: string,
+    filePattern: string | undefined,
+    caseSensitive: boolean
+  ): Promise<string> {
+    if (!workspaceRoot) return 'No workspace open';
+    if (!query) return 'Error: empty search query';
+    try {
+      // Escape query for use as a fixed string
+      const escaped = query.replace(/[\\'"]/g, '\\$&');
+      const caseFlag = caseSensitive ? '' : '-i';
+      const globArg = filePattern ? `--include="${filePattern}"` : '';
+      // Try ripgrep first, fall back to grep
+      const rgCmd = `rg --fixed-strings ${caseFlag} -n --max-count 50 ${globArg} ${JSON.stringify(query)} .`;
+      const grepCmd = `grep -r --fixed-strings ${caseFlag} -n -m 50 ${globArg} ${JSON.stringify(escaped)} .`;
+
+      let output = '';
+      try {
+        const result = await this._execLocal(rgCmd, workspaceRoot);
+        if (result.exitCode === 0 || result.stdout) {
+          output = result.stdout;
+        }
+      } catch {
+        // rg not available, try grep
+        try {
+          const result = await this._execLocal(grepCmd, workspaceRoot);
+          output = result.stdout;
+        } catch (grepErr) {
+          return `Error searching: ${grepErr instanceof Error ? grepErr.message : String(grepErr)}`;
+        }
+      }
+
+      if (!output.trim()) return `No matches found for: ${JSON.stringify(query)}`;
+      const lines = output.trim().split('\n').slice(0, 50);
+      return `${lines.length} match(es):\n` + lines.join('\n');
+    } catch (err) {
+      return `Error searching: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  }
+
+  private async _localStagePendingEdit(
+    callId: string,
+    filePath: string,
+    proposed: string,
+    workspaceRoot: string | null,
+    webview: vscode.Webview
+  ): Promise<void> {
+    if (!workspaceRoot) { await this._submitToolResult(callId, 'No workspace open'); return; }
+    const abs = this._safeLocalPath(workspaceRoot, filePath);
+    if (!abs) { await this._submitToolResult(callId, 'Error: path traversal attempt blocked'); return; }
+
+    let original = '';
+    let isNewFile = true;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
+      original = Buffer.from(bytes).toString('utf-8');
+      isNewFile = false;
+    } catch { /* file doesn't exist yet */ }
+
+    this._pendingLocalOps.set(callId, { kind: 'edit', path: filePath, proposed, workspaceRoot });
+    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff: '', original, proposed, isNewFile });
+  }
+
+  private async _localStageReplaceEdit(
+    callId: string,
+    filePath: string,
+    oldText: string,
+    newText: string,
+    workspaceRoot: string | null,
+    webview: vscode.Webview
+  ): Promise<void> {
+    if (!workspaceRoot) { await this._submitToolResult(callId, 'No workspace open'); return; }
+    const abs = this._safeLocalPath(workspaceRoot, filePath);
+    if (!abs) { await this._submitToolResult(callId, 'Error: path traversal attempt blocked'); return; }
+
+    let original: string;
+    try {
+      const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
+      original = Buffer.from(bytes).toString('utf-8');
+    } catch {
+      await this._submitToolResult(callId, `File not found: ${filePath}`);
+      return;
+    }
+
+    if (!original.includes(oldText)) {
+      await this._submitToolResult(callId, `Text to replace not found in ${filePath}`);
+      return;
+    }
+
+    const proposed = original.replace(oldText, newText);
+    this._pendingLocalOps.set(callId, { kind: 'edit', path: filePath, proposed, workspaceRoot });
+    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff: '', original, proposed, isNewFile: false });
+  }
+
+  private async _localStageTerminal(
+    callId: string,
+    command: string,
+    workspaceRoot: string | null,
+    webview: vscode.Webview
+  ): Promise<void> {
+    if (!workspaceRoot) { await this._submitToolResult(callId, 'No workspace open'); return; }
+    if (!command.trim()) { await this._submitToolResult(callId, 'Error: empty command'); return; }
+
+    this._pendingLocalOps.set(callId, { kind: 'terminal', command, workspaceRoot });
+    webview.postMessage({ type: 'terminalPending', id: callId, command });
+  }
+
+  private async _submitToolResult(callId: string, content: string): Promise<void> {
+    try {
+      await fetch(`${BACKEND_URL}/agent/tool_result`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ call_id: callId, content }),
+      });
+    } catch { /* agent will timeout after 5 min */ }
+  }
+
+  private _safeLocalPath(workspaceRoot: string, filePath: string): string | null {
+    const abs = path.isAbsolute(filePath)
+      ? path.normalize(filePath)
+      : path.normalize(path.join(workspaceRoot, filePath));
+    const root = path.normalize(workspaceRoot);
+    if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+    return abs;
+  }
+
+  private _execLocal(command: string, cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    return new Promise((resolve) => {
+      exec(command, { cwd, timeout: 30000, maxBuffer: 50 * 1024 }, (err: ExecException | null, stdout: string, stderr: string) => {
+        resolve({
+          stdout: stdout.slice(0, 50000),
+          stderr: stderr.slice(0, 50000),
+          exitCode: (err && typeof err.code === 'number') ? err.code : (err ? 1 : 0),
+        });
+      });
+    });
+  }
+
   // ── file edit operations ──────────────────────────────────────────────────
 
   private async _applyEdit(editId: string, webview: vscode.Webview): Promise<void> {
+    // Local pending op (agent-driven, remote backend scenario)
+    const localOp = this._pendingLocalOps.get(editId);
+    if (localOp && localOp.kind === 'edit') {
+      this._pendingLocalOps.delete(editId);
+      try {
+        const abs = this._safeLocalPath(localOp.workspaceRoot, localOp.path);
+        if (!abs) throw new Error('Path traversal attempt blocked');
+        await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(abs)));
+        await vscode.workspace.fs.writeFile(vscode.Uri.file(abs), Buffer.from(localOp.proposed, 'utf-8'));
+        webview.postMessage({ type: 'editApplied', editId, path: localOp.path });
+        vscode.window.showInformationMessage(`MisterPilot: Applied → ${localOp.path}`);
+        await this._submitToolResult(editId, `File written: ${localOp.path}`);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        webview.postMessage({ type: 'editError', editId, message });
+        vscode.window.showErrorMessage(`MisterPilot apply failed: ${message}`);
+        await this._submitToolResult(editId, `Error writing file: ${message}`);
+      }
+      return;
+    }
+
+    // Fallback: direct backend apply (standalone usage)
     try {
       const res = await fetch(`${BACKEND_URL}/edit/apply`, {
         method: 'POST',
@@ -237,6 +491,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private async _rejectEdit(editId: string, webview: vscode.Webview): Promise<void> {
+    const localOp = this._pendingLocalOps.get(editId);
+    if (localOp && localOp.kind === 'edit') {
+      this._pendingLocalOps.delete(editId);
+      webview.postMessage({ type: 'editRejected', editId, path: localOp.path });
+      await this._submitToolResult(editId, `Edit rejected by user: ${localOp.path}`);
+      return;
+    }
+
     try {
       const res = await fetch(`${BACKEND_URL}/edit/reject`, {
         method: 'POST',
@@ -275,6 +537,57 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     approved: boolean,
     webview: vscode.Webview
   ): Promise<void> {
+    const localOp = this._pendingLocalOps.get(id);
+    if (localOp && localOp.kind === 'terminal') {
+      this._pendingLocalOps.delete(id);
+
+      if (!approved) {
+        webview.postMessage({
+          type: 'terminalResult',
+          id,
+          command: localOp.command,
+          approved: false,
+          stdout: '',
+          stderr: '',
+          exitCode: -1,
+          durationMs: 0,
+          timedOut: false,
+          error: null,
+        });
+        await this._submitToolResult(id, `Command denied by user: ${localOp.command}`);
+        return;
+      }
+
+      const t0 = Date.now();
+      try {
+        const { stdout, stderr, exitCode } = await this._execLocal(localOp.command, localOp.workspaceRoot);
+        const durationMs = Date.now() - t0;
+        webview.postMessage({
+          type: 'terminalResult',
+          id,
+          command: localOp.command,
+          approved: true,
+          stdout,
+          stderr,
+          exitCode,
+          durationMs,
+          timedOut: false,
+          error: null,
+        });
+        const parts: string[] = [];
+        if (stdout) parts.push(`stdout:\n${stdout}`);
+        if (stderr) parts.push(`stderr:\n${stderr}`);
+        parts.push(`exit code: ${exitCode}`);
+        await this._submitToolResult(id, parts.join('\n') || '(no output)');
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        webview.postMessage({ type: 'terminalError', id, command: localOp.command, message });
+        await this._submitToolResult(id, `Command failed: ${message}`);
+      }
+      return;
+    }
+
+    // Fallback: delegate to backend (standalone usage)
     let command = '';
     try {
       const info = await fetch(`${BACKEND_URL}/terminal/pending/${id}`);
