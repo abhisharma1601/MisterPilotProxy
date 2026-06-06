@@ -1,8 +1,8 @@
 """
 Configuration for the PII redaction pipeline.
 
-Reads from sample.env only — .env files are intentionally NOT loaded.
-PROXY_HMAC_KEY is auto-generated and persisted to sample.env on first run.
+Reads from .env — see .env.example for available variables.
+PROXY_HMAC_KEY is auto-generated and persisted to .env on first run.
 """
 from __future__ import annotations
 
@@ -12,10 +12,10 @@ from dataclasses import dataclass
 from typing import Literal
 
 
-def _load_sample_env(path: str | None = None) -> None:
-    """Load variables from sample.env. .env files are explicitly excluded."""
+def _load_env(path: str | None = None) -> None:
+    """Load variables from .env into the environment."""
     env_path = path or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "sample.env"
+        os.path.dirname(os.path.abspath(__file__)), "..", ".env"
     )
     if not os.path.exists(env_path):
         return
@@ -33,7 +33,7 @@ def _load_sample_env(path: str | None = None) -> None:
 
 def _persist_key(key: str, env_path: str | None = None) -> None:
     path = env_path or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", "sample.env"
+        os.path.dirname(os.path.abspath(__file__)), "..", ".env"
     )
     try:
         with open(path, "a", encoding="utf-8") as f:
@@ -63,11 +63,8 @@ class PseudonymConfig:
 
     @classmethod
     def from_env(cls, env_path: str | None = None) -> "PseudonymConfig":
-        """
-        Build config from environment variables, with sample.env fallback.
-        .env files are never read.
-        """
-        _load_sample_env(env_path)
+        """Build config from environment variables, with .env fallback."""
+        _load_env(env_path)
 
         raw_key = os.environ.get("PROXY_HMAC_KEY", "")
         if not raw_key:
