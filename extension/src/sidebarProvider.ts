@@ -37,6 +37,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     view.webview.html = this._buildHtml(view.webview);
 
+    view.onDidChangeVisibility(() => {
+      if (view.visible) {
+        this._postWorkspaceRoot(view.webview);
+        void this._postApiKeyStatus(view.webview);
+      }
+    });
+
     view.webview.onDidReceiveMessage(async (msg: WebviewMessage) => {
       switch (msg.type) {
         case 'ready':
