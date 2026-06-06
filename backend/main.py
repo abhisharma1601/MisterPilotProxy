@@ -1,12 +1,16 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from . import __version__
 from .config import get_config
 from .logging_config import setup_logging
 from .api.routes import chat, workspace, edit, terminal, agent, model
+
+_LANDING = (Path(__file__).parent / "static" / "index.html").read_text()
 
 
 @asynccontextmanager
@@ -32,6 +36,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def landing():
+        return _LANDING
 
     app.include_router(chat.router, prefix="/chat", tags=["chat"])
     app.include_router(workspace.router, prefix="/workspace", tags=["workspace"])

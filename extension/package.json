@@ -7,6 +7,7 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "icon": "resources/icon.png",
   "categories": [
     "Other"
   ],
@@ -18,7 +19,7 @@
         {
           "id": "misterpilot-sidebar",
           "title": "MisterPilot",
-          "icon": "resources/icon.svg"
+          "icon": "resources/sideicon.svg"
         }
       ]
     },

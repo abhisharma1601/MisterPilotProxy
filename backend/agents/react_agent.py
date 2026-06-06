@@ -136,7 +136,10 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
             "name": "execute_terminal",
             "description": (
                 "Run a shell command inside the workspace directory. "
-                "Shows the command to the user and requires approval before execution."
+                "Shows the command to the user and requires approval before execution. "
+                "Use ONLY for: running builds, tests, installs, git operations, or commands "
+                "that cannot be done with the other tools. "
+                "NEVER use this to read files (use read_file) or search code (use search_code)."
             ),
             "parameters": {
                 "type": "object",
@@ -173,12 +176,20 @@ def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
             "You answer questions about code, explain concepts, and help implement changes.",
             "",
             "Available tools:",
-            "  read_file, list_files, search_code — read freely, no approval needed",
-            "  write_file, replace_in_file        — shows a diff, requires user approval",
-            "  execute_terminal                   — shows the command, requires user approval",
+            "  read_file        — read a file. Use this to inspect any file.",
+            "  list_files       — list workspace files.",
+            "  search_code      — search for text or patterns across the workspace.",
+            "  write_file       — write full file content (shows diff, requires approval).",
+            "  replace_in_file  — replace a specific block in a file (shows diff, requires approval).",
+            "  execute_terminal — run a shell command (requires approval).",
             "",
-            "Always read relevant files before suggesting or making changes.",
-            "Explain what you are doing before each tool call.",
+            "Rules:",
+            "  - Always use read_file to read files. NEVER use execute_terminal to cat, head, or tail a file.",
+            "  - Always use search_code to search. NEVER use execute_terminal to grep or find.",
+            "  - Only use execute_terminal for: builds, tests, package installs, git operations,",
+            "    or tasks that genuinely require a shell command.",
+            "  - Always read relevant files before making changes.",
+            "  - Prefer replace_in_file over write_file when editing an existing file.",
         ]
     if workspace_root:
         parts.append(f"\nWorkspace root: {workspace_root}")

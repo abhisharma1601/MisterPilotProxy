@@ -244,25 +244,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         await this._submitToolResult(callId, content);
         break;
       }
-      case 'write_file':
-        await this._localStagePendingEdit(
-          callId,
-          String(args.path ?? ''),
-          String(args.content ?? ''),
-          workspaceRoot,
-          webview
-        );
+      case 'write_file': {
+        const filePath = args.path ? String(args.path) : '';
+        if (!filePath) { await this._submitToolResult(callId, 'Error: missing required parameter "path"'); break; }
+        await this._localStagePendingEdit(callId, filePath, String(args.content ?? ''), workspaceRoot, webview);
         break;
-      case 'replace_in_file':
-        await this._localStageReplaceEdit(
-          callId,
-          String(args.path ?? ''),
-          String(args.old_text ?? ''),
-          String(args.new_text ?? ''),
-          workspaceRoot,
-          webview
-        );
+      }
+      case 'replace_in_file': {
+        const filePath = args.path ? String(args.path) : '';
+        if (!filePath) { await this._submitToolResult(callId, 'Error: missing required parameter "path"'); break; }
+        await this._localStageReplaceEdit(callId, filePath, String(args.old_text ?? ''), String(args.new_text ?? ''), workspaceRoot, webview);
         break;
+      }
       case 'execute_terminal':
         await this._localStageTerminal(callId, String(args.command ?? ''), workspaceRoot, webview);
         break;
@@ -364,8 +357,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       isNewFile = false;
     } catch { /* file doesn't exist yet */ }
 
+    const diff = isNewFile ? '' : this._computeUnifiedDiff(original, proposed, filePath);
     this._pendingLocalOps.set(callId, { kind: 'edit', path: filePath, proposed, workspaceRoot });
-    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff: '', original, proposed, isNewFile });
+    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff, original, proposed, isNewFile });
   }
 
   private async _localStageReplaceEdit(
@@ -395,8 +389,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     const proposed = original.replace(oldText, newText);
+    const diff = this._computeUnifiedDiff(original, proposed, filePath);
     this._pendingLocalOps.set(callId, { kind: 'edit', path: filePath, proposed, workspaceRoot });
-    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff: '', original, proposed, isNewFile: false });
+    webview.postMessage({ type: 'pendingEdit', editId: callId, path: filePath, diff, original, proposed, isNewFile: false });
   }
 
   private async _localStageTerminal(
@@ -427,8 +422,52 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       ? path.normalize(filePath)
       : path.normalize(path.join(workspaceRoot, filePath));
     const root = path.normalize(workspaceRoot);
-    if (abs !== root && !abs.startsWith(root + path.sep)) return null;
+    if (!abs.startsWith(root + path.sep)) return null;
     return abs;
+  }
+
+  private _computeUnifiedDiff(original: string, proposed: string, filename: string): string {
+    const a = original.split('\n');
+    const b = proposed.split('\n');
+    const m = a.length, n = b.length;
+    const CONTEXT = 3;
+
+    const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+    for (let i = 1; i <= m; i++)
+      for (let j = 1; j <= n; j++)
+        dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+
+    type Edit = { op: ' ' | '+' | '-'; line: string };
+    const edits: Edit[] = [];
+    let i = m, j = n;
+    while (i > 0 || j > 0) {
+      if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) { edits.unshift({ op: ' ', line: a[i - 1] }); i--; j--; }
+      else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) { edits.unshift({ op: '+', line: b[j - 1] }); j--; }
+      else { edits.unshift({ op: '-', line: a[i - 1] }); i--; }
+    }
+
+    const changed = edits.map((e, k) => e.op !== ' ' ? k : -1).filter(k => k >= 0);
+    if (!changed.length) return '';
+
+    const out: string[] = [`--- ${filename}`, `+++ ${filename}`];
+    const hunks: Array<[number, number]> = [];
+    let hs = Math.max(0, changed[0] - CONTEXT), he = Math.min(edits.length - 1, changed[0] + CONTEXT);
+    for (let k = 1; k < changed.length; k++) {
+      const ns = Math.max(0, changed[k] - CONTEXT);
+      if (ns <= he + 1) { he = Math.min(edits.length - 1, changed[k] + CONTEXT); }
+      else { hunks.push([hs, he]); hs = ns; he = Math.min(edits.length - 1, changed[k] + CONTEXT); }
+    }
+    hunks.push([hs, he]);
+
+    for (const [s, e] of hunks) {
+      let oldL = 1, newL = 1;
+      for (let k = 0; k < s; k++) { if (edits[k].op !== '+') oldL++; if (edits[k].op !== '-') newL++; }
+      let oldC = 0, newC = 0;
+      for (let k = s; k <= e; k++) { if (edits[k].op !== '+') oldC++; if (edits[k].op !== '-') newC++; }
+      out.push(`@@ -${oldL},${oldC} +${newL},${newC} @@`);
+      for (let k = s; k <= e; k++) out.push(`${edits[k].op}${edits[k].line}`);
+    }
+    return out.join('\n');
   }
 
   private _execLocal(command: string, cwd: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
