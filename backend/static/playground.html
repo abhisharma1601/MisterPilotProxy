@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MisterPilot — OpenAI-Compatible API Playground</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d0d0d;--surface:#141414;--border:#222;--accent:#7fff6e;--accent-dim:rgba(127,255,110,0.12);--text:#e8e8e8;--muted:#888;--font:'Inter',system-ui,sans-serif;--code-bg:#0a0a0a;--code-border:#1e1e1e}
+body{background:var(--bg);color:var(--text);font-family:var(--font);min-height:100vh;display:flex;flex-direction:column;align-items:center}
+nav{width:100%;max-width:900px;display:flex;justify-content:space-between;align-items:center;padding:24px 32px}
+.logo{font-size:1.1rem;font-weight:700;letter-spacing:-0.02em;color:var(--text);text-decoration:none}
+.logo span{color:var(--accent)}
+nav a.back-link{font-size:0.85rem;color:var(--muted);text-decoration:none;border:1px solid var(--border);padding:6px 14px;border-radius:6px;transition:color 0.2s,border-color 0.2s}
+nav a.back-link:hover{color:var(--text);border-color:#444}
+main{width:100%;max-width:900px;padding:40px 32px 100px}
+.badge{display:inline-block;font-size:0.75rem;font-weight:600;letter-spacing:0.06em;text-transform:uppercase;color:var(--accent);background:var(--accent-dim);border:1px solid rgba(127,255,110,0.25);padding:4px 12px;border-radius:999px;margin-bottom:20px}
+h1{font-size:clamp(1.8rem,4vw,2.6rem);font-weight:800;letter-spacing:-0.03em;line-height:1.2;margin-bottom:12px}
+h1 em{font-style:normal;color:var(--accent)}
+.subtitle{font-size:1rem;color:var(--muted);margin-bottom:48px;line-height:1.6}
+section{margin-bottom:48px}
+h2{font-size:1.25rem;font-weight:700;margin-bottom:8px;display:flex;align-items:center;gap:10px}
+h2 .tag{font-size:0.7rem;font-weight:600;text-transform:uppercase;padding:2px 8px;border-radius:4px;background:var(--accent-dim);color:var(--accent);letter-spacing:0.04em}
+p.desc{color:var(--muted);font-size:0.9rem;margin-bottom:16px;line-height:1.6}
+.code-block{background:var(--code-bg);border:1px solid var(--code-border);border-radius:10px;overflow:hidden;position:relative;margin-bottom:12px}
+.code-header{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-bottom:1px solid var(--code-border);background:var(--surface)}
+.code-lang{font-size:0.75rem;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
+.copy-btn{font-size:0.75rem;color:var(--muted);background:none;border:1px solid var(--border);padding:4px 10px;border-radius:5px;cursor:pointer;transition:color 0.2s,border-color 0.2s}
+.copy-btn:hover{color:var(--text);border-color:#444}
+.copy-btn.copied{color:var(--accent);border-color:var(--accent)}
+pre{margin:0;padding:16px;overflow-x:auto;font-family:'JetBrains Mono','Fira Code','Cascadia Code',monospace;font-size:0.82rem;line-height:1.7;color:#d4d4d4;white-space:pre-wrap;word-break:break-word}
+code .str{color:#7fff6e}
+code .kw{color:#c586c0}
+code .fn{color:#569cd6}
+code .cmt{color:#6a9955}
+code .num{color:#b5cea8}
+code .cls{color:#4ec9b0}
+.spec-block{display:grid;grid-template-columns:140px 1fr;gap:4px 0;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:20px 24px;margin-bottom:12px;font-size:0.85rem}
+.spec-block .label{color:var(--muted);font-weight:500}
+.spec-block .value{font-family:'JetBrains Mono',monospace;color:var(--text)}
+.spec-block .value .verb{display:inline-block;padding:1px 6px;border-radius:3px;font-size:0.75rem;font-weight:700;margin-right:4px}
+.verb.post{background:rgba(100,180,255,0.15);color:#64b4ff}
+.method{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.75rem;font-weight:700;margin-right:8px}
+.method.post{background:rgba(100,180,255,0.15);color:#64b4ff}
+.method.get{background:rgba(100,255,150,0.15);color:#64ff96}
+.endpoint{color:var(--accent);font-family:'JetBrains Mono',monospace;font-size:0.9rem}
+@media(max-width:640px){
+  .spec-block{grid-template-columns:1fr}
+  nav{padding:20px 16px}
+  main{padding:20px 16px 80px}
+}
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="/" class="logo">Mister<span>Pilot</span></a>
+  <a href="/docs" class="back-link">API Docs →</a>
+</nav>
+
+<main>
+  <div class="badge">OpenAI Compatible</div>
+  <h1>Use MisterPilot <em>as a drop-in</em> OpenAI replacement</h1>
+  <p class="subtitle">
+    Point any OpenAI SDK at <code style="color:var(--accent);background:var(--accent-dim);padding:2px 6px;border-radius:3px">https://misterpilot.online/v1</code>
+    — your API key, any model supported by DeepSeek.
+  </p>
+
+  <!-- ── 1. Python SDK ────────────────────────────────────────── -->
+  <section>
+    <h2>1. <span class="tag">Python</span> OpenAI SDK</h2>
+    <p class="desc">Install the OpenAI package and swap <code>base_url</code> — that's it.</p>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">pip install</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code>pip install openai</code></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">python — streaming</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://misterpilot.online/v1",
+    api_key="sk-your-deepseek-api-key",
+)
+
+response = client.chat.completions.create(
+    model="deepseek-v4-pro",
+    messages=[
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Explain quantum computing in one paragraph."},
+    ],
+    temperature=0.7,
+    max_tokens=1024,
+)
+
+print(response.choices[0].message.content)</code></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">python — streaming (smooth token-by-token)</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code>from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://misterpilot.online/v1",
+    api_key="sk-your-deepseek-api-key",
+)
+
+stream = client.chat.completions.create(
+    model="deepseek-v4-pro",
+    messages=[{"role": "user", "content": "Write a haiku about coding."}],
+    stream=True,
+)
+
+for chunk in stream:
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="", flush=True)</code></pre>
+    </div>
+  </section>
+
+  <!-- ── 2. cURL ───────────────────────────────────────────────── -->
+  <section>
+    <h2>2. <span class="tag">cURL</span> Direct HTTP</h2>
+    <p class="desc">Call the API directly from the terminal with zero dependencies.</p>
+
+    <div class="spec-block">
+      <span class="label">Method</span>
+      <span class="value"><span class="verb post">POST</span></span>
+      <span class="label">Endpoint</span>
+      <span class="value" style="color:var(--accent)">/v1/chat/completions</span>
+      <span class="label">Content-Type</span>
+      <span class="value">application/json</span>
+      <span class="label">Auth</span>
+      <span class="value">Authorization: Bearer &lt;key&gt;</span>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">cURL — non-streaming</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code>curl https://misterpilot.online/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-deepseek-api-key" \
+  -d '{
+    "model": "deepseek-v4-pro",
+    "messages": [
+      {"role": "system", "content": "You are a helpful assistant."},
+      {"role": "user", "content": "What is the capital of France?"}
+    ],
+    "temperature": 0.7,
+    "max_tokens": 256
+  }'</code></pre>
+    </div>
+
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">cURL — streaming (SSE)</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code>curl https://misterpilot.online/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-your-deepseek-api-key" \
+  -d '{
+    "model": "deepseek-v4-pro",
+    "messages": [
+      {"role": "user", "content": "Count from 1 to 20, one number per line."}
+    ],
+    "stream": true
+  }'</code></pre>
+    </div>
+  </section>
+
+  <!-- ── 3. API Key Resolution ─────────────────────────────────── -->
+  <section>
+    <h2>3. API Key <span class="tag">Resolution</span></h2>
+    <p class="desc">
+      Your key is resolved in this priority order. You only need to provide it <em>one</em> way.
+    </p>
+    <div class="spec-block" style="grid-template-columns:80px 1fr">
+      <span class="label" style="color:var(--accent);font-weight:700">#1</span>
+      <span class="value"><code>Authorization: Bearer &lt;key&gt;</code> header</span>
+      <span class="label">#2</span>
+      <span class="value"><code>"apikey"</code> field in the JSON body</span>
+      <span class="label">#3</span>
+      <span class="value">Default from <code style="color:var(--accent)">config.yaml</code></span>
+    </div>
+  </section>
+
+  <!-- ── 4. PII Redaction ──────────────────────────────────────── -->
+  <section>
+    <h2>4. Built-in PII <span class="tag">Protection</span></h2>
+    <p class="desc">
+      Every user message is automatically scanned and redacted before it reaches the LLM.
+      Emails, phone numbers, IP addresses, credit card numbers, SSNs, and more are
+      replaced with placeholders — no configuration required.
+    </p>
+    <div class="code-block">
+      <div class="code-header">
+        <span class="code-lang">example — automatically redacted</span>
+        <button class="copy-btn" onclick="copyCode(this)">Copy</button>
+      </div>
+      <pre><code># This message:
+{ "role": "user", "content": "My email is alice@company.com, call me at +1-555-123-4567" }
+
+# Becomes this before reaching the LLM:
+{ "role": "user", "content": "My email is [EMAIL_0], call me at [PHONE_0]" }</code></pre>
+    </div>
+  </section>
+
+  <!-- ── 5. Supported Models ───────────────────────────────────── -->
+  <section>
+    <h2>5. Supported <span class="tag">Models</span></h2>
+    <div class="spec-block">
+      <span class="label">Default</span>
+      <span class="value" style="color:var(--accent)">deepseek-v4-pro</span>
+      <span class="label">Also available</span>
+      <span class="value">deepseek-v4-flash (any model your DeepSeek API key grants access to)</span>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function copyCode(btn) {
+  const code = btn.closest('.code-block').querySelector('code').innerText;
+  navigator.clipboard.writeText(code).then(() => {
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => {
+      btn.textContent = 'Copy';
+      btn.classList.remove('copied');
+    }, 1500);
+  });
+}
+</script>
+
+</body>
+</html>

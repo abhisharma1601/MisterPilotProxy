@@ -24,6 +24,44 @@ class DeepSeekClient:
             return RuntimeError("LLM authentication failed — check your API key.")
         return RuntimeError(str(exc))
 
+    async def stream_chat_raw(
+        self,
+        messages: List[Dict[str, Any]],
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+    ) -> AsyncIterator[Dict[str, Any]]:
+        """Stream a chat completion yielding raw OpenAI chunk dicts.
+
+        Each chunk is a dict with id, object, created, model, choices[].delta,
+        finish_reason, and optionally usage — ready for SSE serialization.
+        """
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max(1, self._cfg.max_retries)):
+            try:
+                stream = await self._client.chat.completions.create(
+                    model=model or self._cfg.model,
+                    messages=messages,
+                    stream=True,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stream_options={"include_usage": True},
+                )
+                async for chunk in stream:
+                    yield chunk.model_dump(exclude_none=True)
+                return
+
+            except (AuthenticationError, PermissionDeniedError) as exc:
+                raise self._safe_error(exc)
+            except (APIConnectionError, APITimeoutError) as exc:
+                last_exc = exc
+                if attempt < self._cfg.max_retries - 1:
+                    await asyncio.sleep(2**attempt)
+                continue
+
+        raise last_exc or RuntimeError("stream_chat_raw failed after retries")
+
     async def complete_with_tools(
         self,
         messages: List[Dict[str, Any]],
