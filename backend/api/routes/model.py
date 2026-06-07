@@ -1,22 +1,26 @@
 """
-Direct model access API.
+OpenAI-compatible chat completions API.
 
-POST /model/chat   — takes a model name, API key, and prompt; returns a full
-                     OpenAI-format chat completion JSON response.
-POST /model/stream — same inputs but returns an SSE stream of chunks.
+POST /model/chat   — single endpoint, behaves like OpenAI /v1/chat/completions.
+  - `stream=false` → JSONResponse with a full ChatCompletion object.
+  - `stream=true`  → StreamingResponse with OpenAI-format SSE chunks.
+  - API key is read from the ``Authorization: Bearer <key>`` header, falling
+    back to ``body.apikey`` and then to the configured default.
 
-Both endpoints apply PII redaction on the prompt before sending to the LLM,
-matching the behaviour of /chat/stream.
+POST /model/stream — deprecated alias, kept for backward compat; delegates
+                     to /model/chat with stream=true.
+
+Both modes apply PII redaction on user messages before they reach the LLM.
 """
 
 import json
 import logging
-from typing import Any, Dict, List
+import time
+from typing import Any, AsyncIterator, Dict, List, Optional
 
-from fastapi import APIRouter, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
-from sse_starlette.sse import EventSourceResponse
 
 from ...llm.deepseek_client import get_deepseek_client
 from ...logging_config import log_pii_findings
@@ -27,108 +31,145 @@ log = logging.getLogger("model")
 router = APIRouter()
 
 
-class ModelRequest(BaseModel):
+# ── request model (matches OpenAI chat/completions shape) ─────────────
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+
+class ChatCompletionRequest(BaseModel):
     model: str
-    apikey: str
-    prompt: str
+    messages: List[Message]
+    stream: bool = False
+    temperature: float = 0.7
+    max_tokens: int = 4096
+    apikey: Optional[str] = None
 
 
-# ── shared helper ────────────────────────────────────────────────────
+# ── helpers ───────────────────────────────────────────────────────────
 
-def _sanitize(prompt: str, route: str) -> tuple[str, int]:
-    """Run the PII redaction pipeline on *prompt* and return (safe_text, count)."""
+def _extract_api_key(raw_request: Request, body: ChatCompletionRequest) -> str:
+    auth = raw_request.headers.get("Authorization", "")
+    if auth.startswith("Bearer "):
+        return auth[7:].strip()
+    if body.apikey:
+        return body.apikey
+    from ...config import get_config
+    return get_config().deepseek.api_key or ""
+
+
+def _sanitize_messages(
+    messages: List[Message], route: str
+) -> tuple[List[Dict[str, Any]], int]:
     pipeline = get_pii_pipeline()
-    sanitized, findings = pipeline.redact(prompt)
-    if findings:
-        log_pii_findings(log, route, findings)
-    return sanitized, len(findings)
+    cleaned: List[Dict[str, Any]] = []
+    total_findings = 0
+
+    for m in messages:
+        msg: Dict[str, Any] = {"role": m.role, "content": m.content}
+        if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+            sanitized, findings = pipeline.redact(msg["content"])
+            if findings:
+                log_pii_findings(log, route, findings)
+                total_findings += len(findings)
+            msg["content"] = sanitized
+        cleaned.append(msg)
+
+    return cleaned, total_findings
 
 
-# ── /model/chat ──────────────────────────────────────────────────────
+# ── /model/chat ───────────────────────────────────────────────────────
 
 @router.post("/chat")
-async def model_chat(request: ModelRequest) -> JSONResponse:
-    """
-    Non-streaming completion using the caller's own model and API key.
-
-    Returns the raw OpenAI ChatCompletion JSON with id, object, created,
-    model, choices, usage, and system_fingerprint fields.
-    """
-    sanitized, num_findings = _sanitize(request.prompt, "/model/chat")
-
-    client = get_deepseek_client(request.apikey)
-    messages: List[Dict[str, Any]] = [{"role": "user", "content": sanitized}]
-
-    try:
-        completion = await client.complete(
-            messages=messages,
-            model=request.model,
+async def model_chat(
+    body: ChatCompletionRequest,
+    raw_request: Request,
+):
+    api_key = _extract_api_key(raw_request, body)
+    if not api_key:
+        raise HTTPException(
+            status_code=401,
+            detail="Missing API key. Provide it via Authorization: Bearer <key> header or body.apikey.",
         )
+
+    messages, num_findings = _sanitize_messages(body.messages, "/model/chat")
+    client = get_deepseek_client(api_key)
+
+    if body.stream:
+        return StreamingResponse(
+            _stream_chunks(client, messages, body, num_findings),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    else:
+        try:
+            completion = await client.complete(
+                messages=messages,
+                model=body.model,
+                temperature=body.temperature,
+                max_tokens=body.max_tokens,
+            )
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        result = completion.model_dump()
+        log.info(
+            "[CHAT] POST /model/chat  stream=false  model=%s  redacted=%d  in=%d out=%d",
+            body.model,
+            num_findings,
+            result.get("usage", {}).get("prompt_tokens", 0),
+            result.get("usage", {}).get("completion_tokens", 0),
+        )
+        return JSONResponse(content=result)
+
+
+async def _stream_chunks(
+    client,
+    messages: List[Dict[str, Any]],
+    body: ChatCompletionRequest,
+    num_findings: int,
+) -> AsyncIterator[str]:
+    try:
+        async for chunk in client.stream_chat_raw(
+            messages=messages,
+            model=body.model,
+            temperature=body.temperature,
+            max_tokens=body.max_tokens,
+        ):
+            yield f"data: {json.dumps(chunk)}\n\n"
     except Exception as exc:
-        raise HTTPException(status_code=502, detail=str(exc))
+        log.error("[CHAT] POST /model/chat  stream=true  error=%s", exc)
+        error_chunk: Dict[str, Any] = {
+            "id": "error",
+            "object": "chat.completion.chunk",
+            "created": int(time.time()),
+            "model": body.model,
+            "choices": [
+                {"index": 0, "delta": {}, "finish_reason": "error"}
+            ],
+        }
+        yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        log.info(
+            "[CHAT] POST /model/chat  stream=true  model=%s  redacted=%d",
+            body.model,
+            num_findings,
+        )
+        yield "data: [DONE]\n\n"
 
-    result = completion.model_dump()
-    log.info(
-        "[CHAT] POST /model/chat  model=%s  redacted=%d  out=%d in=%d",
-        request.model,
-        num_findings,
-        result.get("usage", {}).get("prompt_tokens", 0),
-        result.get("usage", {}).get("completion_tokens", 0),
-    )
-    return JSONResponse(content=result)
 
-
-# ── /model/stream ────────────────────────────────────────────────────
+# ── /model/stream (backward-compat alias) ─────────────────────────────
 
 @router.post("/stream")
-async def model_stream(request: ModelRequest) -> EventSourceResponse:
-    """
-    Stream a completion using the caller's own model and API key.
-
-    Request body:
-        model  — model identifier (e.g. "deepseek-v4-pro")
-        apikey — the API key for the provider
-        prompt — the user prompt to send (PII-redacted before dispatch)
-
-    Returns an SSE stream with events:
-        message  → {"type": "chunk", "content": "..."}
-        error    → {"type": "error", "message": "..."}
-        done     → {"type": "done"}
-    """
-    sanitized, num_findings = _sanitize(request.prompt, "/model/stream")
-
-    client = get_deepseek_client(request.apikey)
-    messages: List[dict] = [{"role": "user", "content": sanitized}]
-    usage_out: List = []
-
-    async def generate():
-        try:
-            async for chunk in client.stream_chat(
-                messages=messages,
-                model=request.model,
-                usage_out=usage_out,
-            ):
-                yield {
-                    "event": "message",
-                    "data": json.dumps({"type": "chunk", "content": chunk}),
-                }
-        except Exception as exc:
-            yield {
-                "event": "error",
-                "data": json.dumps({"type": "error", "message": str(exc)}),
-            }
-        finally:
-            usage = usage_out[0] if usage_out else {"prompt_tokens": 0, "completion_tokens": 0}
-            log.info(
-                "[STREAM] POST /model/stream  model=%s  redacted=%d  out=%d in=%d",
-                request.model,
-                num_findings,
-                usage["prompt_tokens"],
-                usage["completion_tokens"],
-            )
-            yield {
-                "event": "done",
-                "data": json.dumps({"type": "done"}),
-            }
-
-    return EventSourceResponse(generate())
+async def model_stream(
+    body: ChatCompletionRequest,
+    raw_request: Request,
+):
+    """Deprecated alias — delegates to /model/chat with stream=true."""
+    body.stream = True
+    return await model_chat(body, raw_request)

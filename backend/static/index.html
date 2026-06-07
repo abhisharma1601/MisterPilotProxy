@@ -131,13 +131,13 @@
       border: 1px solid var(--border);
     }
 
-    /* FEATURES */
+    /* FEATURES — 6 cards, perfect 3×2 grid */
     .features {
       width: 100%;
       max-width: 1100px;
-      padding: 20px 32px 80px;
+      padding: 20px 32px 0;
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      grid-template-columns: repeat(3, 1fr);
       gap: 16px;
     }
 
@@ -152,20 +152,109 @@
     .card:hover { border-color: #333; }
 
     .card-icon {
-      font-size: 1.4rem;
-      margin-bottom: 14px;
+      font-size: 1.5rem;
+      margin-bottom: 12px;
     }
 
     .card h3 {
       font-size: 0.95rem;
       font-weight: 700;
-      margin-bottom: 8px;
+      margin-bottom: 6px;
+      color: var(--text);
     }
 
     .card p {
       font-size: 0.85rem;
       color: var(--muted);
-      line-height: 1.6;
+      line-height: 1.55;
+    }
+
+    /* ── OpenAI highlight strip ─────────────────────── */
+    .openai-strip {
+      width: 100%;
+      max-width: 1100px;
+      padding: 24px 32px 80px;
+    }
+
+    .openai-strip-inner {
+      background: linear-gradient(135deg, rgba(127,255,110,0.06) 0%, rgba(127,255,110,0.015) 100%);
+      border: 1px solid rgba(127,255,110,0.18);
+      border-radius: 14px;
+      padding: 36px 40px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 32px;
+      flex-wrap: wrap;
+    }
+
+    .openai-strip-left {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+
+    .openai-strip-icon {
+      width: 52px;
+      height: 52px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(127,255,110,0.25);
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.4rem;
+      flex-shrink: 0;
+    }
+
+    .openai-strip h4 {
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 4px;
+    }
+
+    .openai-strip h4 span {
+      color: var(--accent);
+    }
+
+    .openai-strip p {
+      font-size: 0.82rem;
+      color: var(--muted);
+      max-width: 460px;
+      line-height: 1.5;
+    }
+
+    .openai-strip .btn-strip {
+      flex-shrink: 0;
+      padding: 11px 22px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-decoration: none;
+      background: var(--accent);
+      color: #000;
+      transition: opacity 0.2s;
+    }
+
+    .openai-strip .btn-strip:hover { opacity: 0.8; }
+
+    @media (max-width: 768px) {
+      .features { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 540px) {
+      .features { grid-template-columns: 1fr; }
+      .openai-strip-inner {
+        padding: 28px 24px;
+        text-align: center;
+        justify-content: center;
+      }
+      .openai-strip-left {
+        flex-direction: column;
+        text-align: center;
+      }
+      .openai-strip p { max-width: 100%; }
     }
 
     /* STEPS */
@@ -183,110 +272,68 @@
       margin-bottom: 8px;
     }
 
-    .steps .section-sub {
-      font-size: 0.9rem;
+    .section-sub {
+      font-size: 0.95rem;
       color: var(--muted);
-      margin-bottom: 48px;
+      margin-bottom: 40px;
     }
 
     .steps-grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-      gap: 0;
-      position: relative;
-    }
-
-    .step {
-      padding: 0 24px;
-      position: relative;
-    }
-
-    .step:not(:last-child)::after {
-      content: '→';
-      position: absolute;
-      right: -10px;
-      top: 20px;
-      color: var(--border);
-      font-size: 1.2rem;
-    }
-
-    .step-num {
-      width: 40px;
-      height: 40px;
-      border-radius: 50%;
-      background: var(--accent-dim);
-      border: 1px solid rgba(127,255,110,0.3);
-      color: var(--accent);
-      font-size: 0.85rem;
-      font-weight: 700;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 16px;
-    }
-
-    .step h4 {
-      font-size: 0.9rem;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-
-    .step p {
-      font-size: 0.82rem;
-      color: var(--muted);
-      line-height: 1.6;
-    }
-
-    /* PRIVACY STRIP */
-    .privacy {
-      width: 100%;
-      border-top: 1px solid var(--border);
-      border-bottom: 1px solid var(--border);
-      background: var(--surface);
-      padding: 32px;
-      display: flex;
-      justify-content: center;
-    }
-
-    .privacy-inner {
-      max-width: 1100px;
-      width: 100%;
-      display: flex;
-      align-items: flex-start;
+      grid-template-columns: repeat(3, 1fr);
       gap: 16px;
     }
 
-    .privacy-icon { font-size: 1.4rem; flex-shrink: 0; margin-top: 2px; }
+    .step-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 28px 20px;
+    }
 
-    .privacy-inner h3 {
+    .step-num {
+      display: inline-block;
+      width: 36px;
+      height: 36px;
+      line-height: 36px;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 700;
+      color: var(--accent);
+      background: var(--accent-dim);
+      margin-bottom: 14px;
+    }
+
+    .step-card h4 {
       font-size: 0.95rem;
       font-weight: 700;
       margin-bottom: 6px;
+      color: var(--text);
     }
 
-    .privacy-inner p {
-      font-size: 0.85rem;
+    .step-card p {
+      font-size: 0.84rem;
       color: var(--muted);
-      line-height: 1.6;
-      max-width: 760px;
+      line-height: 1.5;
+    }
+
+    @media (max-width: 640px) {
+      .steps-grid { grid-template-columns: 1fr; }
     }
 
     /* FOOTER */
     footer {
       width: 100%;
       max-width: 1100px;
-      padding: 28px 32px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 8px;
+      padding: 40px 32px;
+      text-align: center;
+      border-top: 1px solid var(--border);
     }
 
-    footer p { font-size: 0.8rem; color: var(--muted); }
-
-    footer a { color: var(--muted); text-decoration: none; }
-    footer a:hover { color: var(--text); }
+    footer p {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
   </style>
 </head>
 <body>
@@ -299,15 +346,11 @@
   <section class="hero">
     <div class="badge">VS Code Extension</div>
     <h1>Your AI coding assistant,<br /><em>built for developers</em></h1>
-    <p class="subtitle">
-      MisterPilot brings a powerful AI agent directly into your editor. Write code, review diffs,
-      run searches, and execute commands — all with your approval, never behind your back.
-    </p>
+    <p class="subtitle">MisterPilot brings agentic AI directly into VS Code — chat, edit, search, and run terminal commands, all from your sidebar.</p>
     <div class="cta-group">
-      <a class="btn btn-primary" href="https://marketplace.visualstudio.com/items?itemName=misterpilot.misterpilot" target="_blank">
-        Install on VS Code
-      </a>
+      <a class="btn btn-primary" href="https://marketplace.visualstudio.com/items?itemName=MisterPilot.misterpilot" target="_blank" rel="noopener">Install on VS Code</a>
       <a class="btn btn-secondary" href="/docs">Read the Docs</a>
+      <a class="btn btn-secondary" href="/playground">API Playground</a>
     </div>
   </section>
 
@@ -344,45 +387,44 @@
     </div>
   </section>
 
+  <!-- ── OpenAI highlight banner ────────────────────── -->
+  <section class="openai-strip">
+    <div class="openai-strip-inner">
+      <div class="openai-strip-left">
+        <div class="openai-strip-icon">🔄</div>
+        <div>
+          <h4>Now <span>OpenAI Compatible</span></h4>
+          <p>Use the OpenAI Python SDK or any OpenAI-compatible client directly. Just swap the base URL — same API shape, streaming &amp; all.</p>
+        </div>
+      </div>
+      <a class="btn-strip" href="/playground">Explore the Playground →</a>
+    </div>
+  </section>
+
   <section class="steps">
     <h2>Up and running in 3 steps</h2>
     <p class="section-sub">No config files. No complex setup. Just install and go.</p>
     <div class="steps-grid">
-      <div class="step">
+      <div class="step-card">
         <div class="step-num">1</div>
         <h4>Install the extension</h4>
-        <p>Search for <strong>MisterPilot</strong> in the VS Code Marketplace and hit Install.</p>
+        <p>Grab MisterPilot from the VS Code marketplace with a single click.</p>
       </div>
-      <div class="step">
+      <div class="step-card">
         <div class="step-num">2</div>
-        <h4>Add your DeepSeek key</h4>
-        <p>Open the command palette, run <strong>MisterPilot: Set API Key</strong>, and paste your key from platform.deepseek.com.</p>
+        <h4>Add your API key</h4>
+        <p>Drop your DeepSeek API key into the extension settings. One field, done.</p>
       </div>
-      <div class="step">
+      <div class="step-card">
         <div class="step-num">3</div>
-        <h4>Start coding</h4>
-        <p>Click the MisterPilot icon in the sidebar and start chatting. That's it.</p>
+        <h4>Start building</h4>
+        <p>Open the sidebar, start chatting, and let the AI help you code faster than ever.</p>
       </div>
     </div>
   </section>
 
-  <div class="privacy">
-    <div class="privacy-inner">
-      <div class="privacy-icon">🔒</div>
-      <div>
-        <h3>Your data stays yours</h3>
-        <p>
-          MisterPilot filters and anonymises all content before it reaches the AI model. Emails, credentials,
-          phone numbers, and other PII are stripped at the source. DeepSeek never receives your raw data —
-          only sanitised, task-relevant content is transmitted.
-        </p>
-      </div>
-    </div>
-  </div>
-
   <footer>
-    <p>© 2025 MisterPilot. Built for developers.</p>
-    <p><a href="/docs">Docs</a></p>
+    <p>&copy; 2025 MisterPilot. Built for developers, by developers.</p>
   </footer>
 
 </body>
