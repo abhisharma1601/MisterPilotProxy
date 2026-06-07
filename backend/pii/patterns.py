@@ -16,6 +16,7 @@ from enum import Enum
 
 
 class EntityType(str, Enum):
+    PEM_KEY  = "PEM_KEY"
     JWT      = "JWT"
     AI_KEY   = "AI_KEY"
     GH_TOKEN = "GH_TOKEN"
@@ -36,6 +37,27 @@ class PatternDef:
 
 
 PATTERN_REGISTRY: list[PatternDef] = [
+
+    # PEM private keys (RSA, EC, DSA, OpenSSH, etc.) — multi-line base64
+    # blocks between BEGIN/END markers.  PEM_KEY_8290
+    PatternDef(
+        EntityType.PEM_KEY,
+        re.compile(
+            r"-----BEGIN (?:"
+            r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
+            r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
+            r"|EC PARAMETERS"
+            r")-----"
+            r"\s+[A-Za-z0-9+/=\s]+?"
+            r"-----END (?:"
+            r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
+            r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
+            r"|EC PARAMETERS"
+            r")-----",
+            re.DOTALL,
+        ),
+        priority=93,
+    ),
 
     # JSON Web Token — three base64url segments, header always starts with eyJ.
     PatternDef(
