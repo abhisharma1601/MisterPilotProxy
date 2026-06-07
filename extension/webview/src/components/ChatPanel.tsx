@@ -51,6 +51,17 @@ export function ChatPanel() {
           break;
 
         // chat streaming
+        case 'sanitized_input':
+          setMessages((prev) => {
+            const idx = [...prev].reverse().findIndex((m) => m.role === 'user');
+            if (idx === -1) return prev;
+            const realIdx = prev.length - 1 - idx;
+            const updated = [...prev];
+            updated[realIdx] = { ...updated[realIdx], content: msg.content };
+            return updated;
+          });
+          break;
+
         case 'chunk':
           pendingTurnRef.current.content += msg.content;
           setMessages((prev) => {

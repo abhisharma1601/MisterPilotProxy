@@ -77,11 +77,30 @@ async def agent_stream(
             msg["content"] = sanitized
         messages.append(msg)
 
+    # Detect if the last user message was redacted so the UI can show the placeholder
+    last_user_sanitized: Optional[str] = next(
+        (m["content"] for m in reversed(messages)
+         if m.get("role") == "user" and isinstance(m.get("content"), str)),
+        None,
+    )
+    last_user_original: Optional[str] = next(
+        (m.content for m in reversed(request.messages)
+         if m.role == "user" and isinstance(m.content, str)),
+        None,
+    )
+    input_was_redacted = (
+        last_user_original is not None
+        and last_user_sanitized is not None
+        and last_user_original != last_user_sanitized
+    )
+
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
     usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
 
     async def generate():
+        if input_was_redacted:
+            yield {"data": json.dumps({"type": "sanitized_input", "content": last_user_sanitized})}
         try:
             async for event in react_agent.run(
                 messages, request.workspace_root, api_key=x_api_key, model=model, mode=mode
