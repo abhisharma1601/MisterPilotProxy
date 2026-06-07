@@ -1,11 +1,16 @@
+import logging
 import time
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import List, Optional
 
+from ...logging_config import log_pii_findings
+from ...services.pii_service import get_pii_pipeline
 from ...services.workspace import list_files
 from ...tools.file_tools import read_file, PathTraversalError
 from ...tools.search_tools import search_code, SearchMatch
+
+log = logging.getLogger("workspace")
 
 router = APIRouter()
 
@@ -65,7 +70,7 @@ async def get_file_content(
     root: str = Query(..., description="Absolute path to workspace root"),
     path: str = Query(..., description="File path relative to workspace root"),
 ) -> FileContentResponse:
-    """Return the text content of a single file."""
+    """Return the text content of a single file (PII redacted)."""
     try:
         content = read_file(root, path)
     except PathTraversalError as exc:
@@ -75,7 +80,12 @@ async def get_file_content(
     except (IsADirectoryError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    return FileContentResponse(path=path, content=content, size=len(content))
+    pipeline = get_pii_pipeline()
+    sanitized, findings = pipeline.redact(content)
+    if findings:
+        log_pii_findings(log, "/workspace/file", findings)
+
+    return FileContentResponse(path=path, content=sanitized, size=len(sanitized))
 
 
 @router.post("/search", response_model=SearchResponse)

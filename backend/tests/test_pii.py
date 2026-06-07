@@ -194,6 +194,35 @@ MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ
         assert "MIIEog" in restored
         assert placeholder not in restored
 
+    def test_pem_key_env_format_literal_newline(self):
+        """Keys stored in .env files / env vars use literal \\n, not real newlines."""
+        p = make_pipeline()
+        pem = "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\\nMIIEogIBAAKCAQEA\\n-----END RSA PRIVATE KEY-----"
+        out, findings = p.redact(pem)
+        assert "MIIEog" not in out, "PEM body must be redacted"
+        assert len(findings) >= 1
+        assert any(f.entity_type == "PEM_KEY" for f in findings)
+
+    def test_pem_key_env_format_mixed(self):
+        """Real newlines in body, literal \\n at the boundaries."""
+        p = make_pipeline()
+        pem = (
+            "KEY=-----BEGIN EC PRIVATE KEY-----\\n"
+            "MHcCAQEEIIG5G0G9gJhGQb4B\\n"
+            "AwEHoUQDQgAE-----END EC PRIVATE KEY-----"
+        )
+        out, findings = p.redact(pem)
+        assert "MHcCAQEE" not in out, "EC body must be redacted"
+        assert any(f.entity_type == "PEM_KEY" for f in findings)
+
+    def test_pem_key_env_format_not_detected_without_markers(self):
+        """Literal \\n alone should not cause false PEM detection."""
+        p = make_pipeline()
+        text = "some\\ndata\\nwithout\\nmarkers"
+        _, findings = p.redact(text)
+        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
+        assert len(pem_findings) == 0, "Literal \\\\n without BEGIN/END should not match"
+
 # Overlap resolution                                                           #
 # --------------------------------------------------------------------------- #
 

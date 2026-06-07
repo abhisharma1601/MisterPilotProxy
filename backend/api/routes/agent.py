@@ -127,8 +127,14 @@ async def submit_tool_result(req: ToolResultRequest) -> ToolResultResponse:
     """
     Called by the VS Code extension after it has executed a tool locally.
     Unblocks the waiting agent coroutine in ApprovalRegistry.
+    Tool result content is redacted for PII before reaching the agent loop.
     """
-    resolved = get_approval_registry().resolve(req.call_id, {"content": req.content})
+    pipeline = get_pii_pipeline()
+    sanitized, findings = pipeline.redact(req.content)
+    if findings:
+        log_pii_findings(log, "/agent/tool_result", findings)
+
+    resolved = get_approval_registry().resolve(req.call_id, {"content": sanitized})
     if not resolved:
         raise HTTPException(status_code=404, detail=f"No pending tool call: {req.call_id!r}")
     return ToolResultResponse(ok=True)

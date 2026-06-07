@@ -40,6 +40,8 @@ PATTERN_REGISTRY: list[PatternDef] = [
 
     # ---- PEM private keys (RSA, EC, DSA, OpenSSH) ----
     # Multi-line base64 blocks between BEGIN/END markers.
+    # Accepts both real newlines (pasted keys) and literal \n
+    # escape sequences (keys from .env files / env vars).
     PatternDef(
         EntityType.PEM_KEY,
         re.compile(
@@ -48,7 +50,7 @@ PATTERN_REGISTRY: list[PatternDef] = [
             r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
             r"|EC PARAMETERS"
             r")-----"
-            r"\s+[A-Za-z0-9+/=\s]+?"
+            r"(?:\\n|\s)+[A-Za-z0-9+/=\\n\s]+?"
             r"-----END (?:"
             r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
             r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
