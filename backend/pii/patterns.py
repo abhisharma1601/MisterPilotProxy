@@ -50,7 +50,7 @@ PATTERN_REGISTRY: list[PatternDef] = [
             r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
             r"|EC PARAMETERS"
             r")-----"
-            r"(?:\\n|\s)+[A-Za-z0-9+/=\\n\s]+?"
+            r".+?"
             r"-----END (?:"
             r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
             r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
