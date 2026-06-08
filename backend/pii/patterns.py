@@ -5,8 +5,8 @@ Covers credentials and PII that realistically appear in code comments,
 log pastes, and casual prompts sent to an LLM.
 
 Priority ladder (higher wins on overlap):
-  JWT 95 > AI_KEY 90 > GH_TOKEN 88 > AWS_KEY 87 > DB_URL 85 > API_KEY 80
-  > SSN 25 > EMAIL 20 > PHONE 10
+  JWT 95 > PEM_KEY 93 > AI_KEY 90 > GH_TOKEN 88 > AWS_KEY 87
+  > DB_URL 85 > API_KEY 80 > SSN 25 > EMAIL 20 > PHONE 10
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from enum import Enum
 
 
 class EntityType(str, Enum):
+    PEM_KEY  = "PEM_KEY"
     JWT      = "JWT"
     AI_KEY   = "AI_KEY"
     GH_TOKEN = "GH_TOKEN"
@@ -37,49 +38,73 @@ class PatternDef:
 
 PATTERN_REGISTRY: list[PatternDef] = [
 
-    # JSON Web Token — three base64url segments, header always starts with eyJ.
+    # ---- PEM private keys (RSA, EC, DSA, OpenSSH) ----
+    # Multi-line base64 blocks between BEGIN/END markers.
+    # Accepts both real newlines (pasted keys) and literal \n
+    # escape sequences (keys from .env files / env vars).
+    PatternDef(
+        EntityType.PEM_KEY,
+        re.compile(
+            r"-----BEGIN (?:"
+            r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
+            r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
+            r"|EC PARAMETERS"
+            r")-----"
+            r".+?"
+            r"-----END (?:"
+            r"RSA PRIVATE KEY|DSA PRIVATE KEY|EC PRIVATE KEY"
+            r"|OPENSSH PRIVATE KEY|PRIVATE KEY|ENCRYPTED PRIVATE KEY"
+            r"|EC PARAMETERS"
+            r")-----",
+            re.DOTALL,
+        ),
+        priority=93,
+    ),
+
+    # ---- JSON Web Token ----
+    # Three base64url segments; header always starts with eyJ.
     PatternDef(
         EntityType.JWT,
         re.compile(r"eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+"),
         priority=95,
     ),
 
-    # OpenAI / Anthropic / generic "sk-" API keys.
+    # ---- OpenAI / Anthropic / generic "sk-" API keys ----
     PatternDef(
         EntityType.AI_KEY,
         re.compile(r"\bsk-[A-Za-z0-9]{20,}\b"),
         priority=90,
     ),
 
-    # GitHub personal access tokens (classic ghp_ format).
+    # ---- GitHub personal access tokens (classic ghp_ format) ----
     PatternDef(
         EntityType.GH_TOKEN,
         re.compile(r"\bghp_[A-Za-z0-9]{36}\b"),
         priority=88,
     ),
 
-    # AWS access key IDs.
+    # ---- AWS access key IDs ----
     PatternDef(
         EntityType.AWS_KEY,
         re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
         priority=87,
     ),
 
-    # Database connection strings with embedded credentials.
-    # e.g. postgres://admin:secret@prod.db.internal:5432/app
+    # ---- Database connection strings with embedded credentials ----
+    # e.g. postgres://user:pass@host/db
     PatternDef(
         EntityType.DB_URL,
         re.compile(
             r"(?:postgresql|postgres|mysql|mongodb|redis|amqp|smtp)s?://"
-            r"[^:@\s]*:[^@\s]+@[^\s/\"']+(?:/[^\s\"']*)?",
+            r'[^:@\s]*:[^@\s]+@[^\s/"]+(?:/[^\s"]*)?',
             re.IGNORECASE,
         ),
         priority=85,
     ),
 
-    # Generic key=value / key:value credential assignments.
+    # ---- Generic key=value / key:value credential assignments ----
     # Redacts only the value portion (group 1); key name is preserved.
-    # e.g. "password=hunter2"  →  "password=API_KEY_XXXX"
+    # e.g. "password=hunter2"  ->  "password=[REDACTED]"
     PatternDef(
         EntityType.API_KEY,
         re.compile(
@@ -91,7 +116,8 @@ PATTERN_REGISTRY: list[PatternDef] = [
         priority=80,
     ),
 
-    # US Social Security Numbers — dashes only to avoid false positives on
+    # ---- US Social Security Numbers ----
+    # Dashes only (xxx-xx-xxxx) to avoid false positives on
     # version strings (1.2.3456) and port numbers.
     PatternDef(
         EntityType.SSN,
@@ -99,7 +125,8 @@ PATTERN_REGISTRY: list[PatternDef] = [
         priority=25,
     ),
 
-    # Email addresses — appear in log lines, comments, test data.
+    # ---- Email addresses ----
+    # Appear in log lines, comments, test data.
     # Excludes well-known dummy domains (example.com, test.com etc).
     PatternDef(
         EntityType.EMAIL,
@@ -107,8 +134,9 @@ PATTERN_REGISTRY: list[PatternDef] = [
         priority=20,
     ),
 
-    # Phone numbers — require clear delimiters to avoid false positives
-    # on port numbers, array indices, and version strings.
+    # ---- Phone numbers ----
+    # Require clear delimiters to avoid false positives on
+    # port numbers, array indices, and version strings.
     PatternDef(
         EntityType.PHONE,
         re.compile(
@@ -123,12 +151,12 @@ PATTERN_REGISTRY: list[PatternDef] = [
 
 PATTERN_REGISTRY.sort(key=lambda p: p.priority, reverse=True)
 
-# Dummy/placeholder email domains that should never be redacted.
+# ---- Exclusion list for dummy/placeholder emails ----
 _EXCLUSION_RE = re.compile(
     r"\b\w+@(?:example|test|placeholder|dummy|sample|localhost|foo|bar)\.\w+\b",
     re.IGNORECASE,
 )
 
-
-def is_excluded(value: str) -> bool:
-    return bool(_EXCLUSION_RE.fullmatch(value))
+def is_excluded(match_text: str) -> bool:
+    """Return True if the match should be excluded (e.g. dummy emails)."""
+    return bool(_EXCLUSION_RE.search(match_text))

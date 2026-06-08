@@ -116,6 +116,113 @@ class TestDbUrlDetection:
 
 
 # --------------------------------------------------------------------------- #
+
+# --------------------------------------------------------------------------- #
+# PEM private key detection                                                    #
+# --------------------------------------------------------------------------- #
+
+class TestPemKeyDetection:
+    def test_rsa_private_key_redacted(self):
+        p = make_pipeline()
+        pem = """-----BEGIN RSA PRIVATE KEY-----
+MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ+Hsjo4Od077d6x4vq
+VlgofAqODiMdoWsPRa7Gl5H0L6T1wlinWNdKgJQR2vQuFPcUZLUmf/9biDPTRbEc
+gJPFuFmQLmMiALBM1IU7iisGnj+G5iN7+mPoAZceWfuMypJ9sWTSVzJQ+pC+TSN1
+5oIaRqlvSOaqEhV1vMhV4W2lK/LqLdugu7N7v1vHdBX+Yg0i7bK6bFPys0F/kcGw
+-----END RSA PRIVATE KEY-----"""
+        out, findings = p.redact(pem)
+        assert "MIIEog" not in out
+        assert len(findings) == 1
+        assert findings[0].entity_type == "PEM_KEY"
+        assert findings[0].placeholder.startswith("PEM_KEY_")
+
+    def test_ec_private_key_redacted(self):
+        p = make_pipeline()
+        pem = """-----BEGIN EC PRIVATE KEY-----
+MHcCAQEEIIG5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4B5GoAoGCCqGSM49
+AwEHoUQDQgAE5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4
+-----END EC PRIVATE KEY-----"""
+        out, findings = p.redact(pem)
+        assert len(findings) == 1
+        assert findings[0].entity_type == "PEM_KEY"
+
+    def test_openssh_private_key_redacted(self):
+        p = make_pipeline()
+        pem = """-----BEGIN OPENSSH PRIVATE KEY-----
+b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
+NhAAAAAwEAAQAAAYEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ+Hsjo4Od077d6x4vq
+-----END OPENSSH PRIVATE KEY-----"""
+        out, findings = p.redact(pem)
+        assert len(findings) == 1
+        assert findings[0].entity_type == "PEM_KEY"
+
+    def test_public_key_not_redacted(self):
+        p = make_pipeline()
+        pub = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArXhNUs6w
+-----END PUBLIC KEY-----"""
+        out, findings = p.redact(pub)
+        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
+        assert len(pem_findings) == 0, "Public keys should not be redacted"
+
+    def test_certificate_not_redacted(self):
+        p = make_pipeline()
+        cert = """-----BEGIN CERTIFICATE-----
+MIIDazCCAlOgAwIBAgIUJ...
+-----END CERTIFICATE-----"""
+        out, findings = p.redact(cert)
+        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
+        assert len(pem_findings) == 0, "Certificates should not be redacted"
+
+    def test_pem_key_placeholder_format(self):
+        p = make_pipeline()
+        pem = """-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC
+-----END PRIVATE KEY-----"""
+        _, f = p.redact(pem)
+        assert f[0].placeholder.startswith("PEM_KEY_")
+        assert f[0].placeholder.count("_") >= 1
+
+    def test_pem_key_restored_correctly(self):
+        p = make_pipeline()
+        pem = """-----BEGIN RSA PRIVATE KEY-----
+MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ
+-----END RSA PRIVATE KEY-----"""
+        out, findings = p.redact(pem)
+        placeholder = findings[0].placeholder
+        restored = p.restore(out)
+        assert "MIIEog" in restored
+        assert placeholder not in restored
+
+    def test_pem_key_env_format_literal_newline(self):
+        """Keys stored in .env files / env vars use literal \\n, not real newlines."""
+        p = make_pipeline()
+        pem = "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\\nMIIEogIBAAKCAQEA\\n-----END RSA PRIVATE KEY-----"
+        out, findings = p.redact(pem)
+        assert "MIIEog" not in out, "PEM body must be redacted"
+        assert len(findings) >= 1
+        assert any(f.entity_type == "PEM_KEY" for f in findings)
+
+    def test_pem_key_env_format_mixed(self):
+        """Real newlines in body, literal \\n at the boundaries."""
+        p = make_pipeline()
+        pem = (
+            "KEY=-----BEGIN EC PRIVATE KEY-----\\n"
+            "MHcCAQEEIIG5G0G9gJhGQb4B\\n"
+            "AwEHoUQDQgAE-----END EC PRIVATE KEY-----"
+        )
+        out, findings = p.redact(pem)
+        assert "MHcCAQEE" not in out, "EC body must be redacted"
+        assert any(f.entity_type == "PEM_KEY" for f in findings)
+
+    def test_pem_key_env_format_not_detected_without_markers(self):
+        """Literal \\n alone should not cause false PEM detection."""
+        p = make_pipeline()
+        text = "some\\ndata\\nwithout\\nmarkers"
+        _, findings = p.redact(text)
+        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
+        assert len(pem_findings) == 0, "Literal \\\\n without BEGIN/END should not match"
+
 # Overlap resolution                                                           #
 # --------------------------------------------------------------------------- #
 

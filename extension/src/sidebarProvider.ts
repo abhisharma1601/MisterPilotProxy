@@ -181,6 +181,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'chunk':
         webview.postMessage({ type: 'chunk', content: payload.content });
         break;
+      case 'sanitized_input':
+        webview.postMessage({ type: 'sanitized_input', content: String(payload.content ?? '') });
+        break;
       case 'error':
         webview.postMessage({ type: 'error', message: payload.message ?? 'Unknown error' });
         break;

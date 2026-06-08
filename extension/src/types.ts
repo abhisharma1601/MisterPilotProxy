@@ -16,6 +16,7 @@ export type WebviewMessage =
 
 export type ExtensionMessage =
   | { type: 'chunk'; content: string }
+  | { type: 'sanitized_input'; content: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
   | { type: 'cost'; usd: number }
