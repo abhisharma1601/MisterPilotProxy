@@ -19,10 +19,10 @@ class DeepSeekClient:
         )
 
     def _safe_error(self, exc: Exception) -> RuntimeError:
-        """Re-raise API errors without leaking the key in the message."""
+        """Re-raise API errors with a safe generic message — never leak upstream details."""
         if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
             return RuntimeError("LLM authentication failed — check your API key.")
-        return RuntimeError(str(exc))
+        return RuntimeError("LLM request failed")
 
     async def stream_chat_raw(
         self,
@@ -60,7 +60,7 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
                 continue
 
-        raise last_exc or RuntimeError("stream_chat_raw failed after retries")
+        raise self._safe_error(last_exc) if last_exc else RuntimeError("stream_chat_raw failed after retries")
 
     async def complete_with_tools(
         self,
@@ -91,7 +91,7 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
                 continue
 
-        raise last_exc or RuntimeError("complete_with_tools failed after retries")
+        raise self._safe_error(last_exc) if last_exc else RuntimeError("complete_with_tools failed after retries")
 
     async def stream_chat(
         self,
@@ -134,7 +134,7 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
                 continue
 
-        raise last_exc or RuntimeError("stream_chat failed after retries")
+        raise self._safe_error(last_exc) if last_exc else RuntimeError("stream_chat failed after retries")
 
     async def stream_with_tools(
         self,
@@ -227,7 +227,7 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
                 continue
 
-        raise last_exc or RuntimeError("stream_with_tools failed after retries")
+        raise self._safe_error(last_exc) if last_exc else RuntimeError("stream_with_tools failed after retries")
 
     async def complete(
         self,
@@ -256,7 +256,7 @@ class DeepSeekClient:
                     await asyncio.sleep(2**attempt)
                 continue
 
-        raise last_exc or RuntimeError("complete failed after retries")
+        raise self._safe_error(last_exc) if last_exc else RuntimeError("complete failed after retries")
 
     async def close(self) -> None:
         await self._client.close()

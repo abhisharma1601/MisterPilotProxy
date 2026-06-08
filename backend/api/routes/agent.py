@@ -120,7 +120,8 @@ async def agent_stream(
                 if event.get("type") == "done":
                     break
         except Exception as exc:  # noqa: BLE001
-            yield {"data": json.dumps({"type": "error", "message": str(exc)})}
+            log.error("[STREAM] POST /agent/stream  error_type=%s", type(exc).__name__)
+            yield {"data": json.dumps({"type": "error", "message": "An internal error occurred"})}
             yield {"data": json.dumps({"type": "done"})}
         finally:
             log.info(

@@ -63,9 +63,11 @@ async def stage_command(req: StageRequest) -> StageResponse:
     try:
         cmd = svc.stage(sanitized_command, req.workspace_root)
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        log.warning("stage_command: invalid input — %s", exc)
+        raise HTTPException(status_code=422, detail="Invalid input")
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        log.warning("stage_command: not a directory — %s", exc)
+        raise HTTPException(status_code=400, detail="Not a directory")
 
     return StageResponse(id=cmd.id, command=cmd.command, workspace_root=cmd.workspace_root)
 
@@ -86,9 +88,11 @@ async def execute_command(req: ExecuteRequest) -> ExecuteResponse:
     try:
         result = await svc.execute(req.id, req.approved, req.timeout)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("execute_command: command not found — %s", exc)
+        raise HTTPException(status_code=404, detail="Command not found")
     except TimeoutError as exc:
-        raise HTTPException(status_code=410, detail=str(exc))
+        log.warning("execute_command: command expired — %s", exc)
+        raise HTTPException(status_code=410, detail="Command expired")
 
     pipeline = get_pii_pipeline()
     stdout, stdout_findings = pipeline.redact(result.stdout)

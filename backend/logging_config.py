@@ -45,8 +45,9 @@ def setup_logging(log_file: str | None = None, level: int = logging.INFO) -> Non
 
 
 def log_pii_findings(log: logging.Logger, route: str, findings: list[Finding]) -> None:
-    """Log PII findings in the same format as DeepSeekProxy."""
-    log.warning("Found %d sensitive item(s) in request to %s:", len(findings), route)
+    """Log PII redaction summary — counts and entity types only, never the values."""
+    type_counts: dict[str, int] = {}
     for f in findings:
-        log.warning("  [%s] %s -> %s", f.entity_type, f.original, f.placeholder)
-        log.warning("  context: %s", f.context)
+        type_counts[f.entity_type] = type_counts.get(f.entity_type, 0) + 1
+    summary = ", ".join(f"{t}:{c}" for t, c in sorted(type_counts.items()))
+    log.warning("PII redacted from %s: %d finding(s) [%s]", route, len(findings), summary)

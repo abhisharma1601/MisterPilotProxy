@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from typing import Optional
@@ -5,6 +7,8 @@ from typing import Optional
 from ...services.approval_registry import get_approval_registry
 from ...services.edit_service import get_edit_service
 from ...tools.file_tools import PathTraversalError
+
+log = logging.getLogger("edit")
 
 router = APIRouter()
 
@@ -71,9 +75,11 @@ async def preview_write(req: WritePreviewRequest) -> PreviewResponse:
     try:
         edit = svc.preview_write(req.root, req.path, req.content)
     except PathTraversalError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        log.warning("preview_write: path traversal — %s", exc)
+        raise HTTPException(status_code=403, detail="Path traversal detected")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        log.warning("preview_write: invalid input — %s", exc)
+        raise HTTPException(status_code=422, detail="Invalid input")
     return _to_preview(edit)
 
 
@@ -84,11 +90,14 @@ async def preview_replace(req: ReplacePreviewRequest) -> PreviewResponse:
     try:
         edit = svc.preview_replace(req.root, req.path, req.old_text, req.new_text)
     except PathTraversalError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        log.warning("preview_replace: path traversal — %s", exc)
+        raise HTTPException(status_code=403, detail="Path traversal detected")
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("preview_replace: file not found — %s", exc)
+        raise HTTPException(status_code=404, detail="File not found")
     except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
+        log.warning("preview_replace: invalid input — %s", exc)
+        raise HTTPException(status_code=422, detail="Invalid input")
     return _to_preview(edit)
 
 
@@ -99,9 +108,11 @@ async def apply_edit(req: ApplyRequest) -> ApplyResponse:
     try:
         edit = svc.apply(req.id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("apply_edit: edit not found — %s", exc)
+        raise HTTPException(status_code=404, detail="Edit not found")
     except TimeoutError as exc:
-        raise HTTPException(status_code=410, detail=str(exc))
+        log.warning("apply_edit: edit expired — %s", exc)
+        raise HTTPException(status_code=410, detail="Edit expired")
     # Unblock any waiting agent coroutine
     get_approval_registry().resolve(req.id, {"applied": True, "path": edit.path})
     return ApplyResponse(applied=True, path=edit.path)
@@ -114,7 +125,8 @@ async def reject_edit(req: RejectRequest) -> RejectResponse:
     try:
         edit = svc.reject(req.id)
     except KeyError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("reject_edit: edit not found — %s", exc)
+        raise HTTPException(status_code=404, detail="Edit not found")
     # Unblock any waiting agent coroutine
     get_approval_registry().resolve(req.id, {"applied": False, "path": edit.path})
     return RejectResponse(rejected=True, path=edit.path)
