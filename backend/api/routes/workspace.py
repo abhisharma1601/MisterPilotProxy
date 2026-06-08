@@ -58,9 +58,11 @@ async def get_workspace_files(
     try:
         files = list_files(root)
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        log.warning("get_workspace_files: not a directory — %s", exc)
+        raise HTTPException(status_code=400, detail="Not a directory")
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        log.warning("get_workspace_files: permission denied — %s", exc)
+        raise HTTPException(status_code=403, detail="Permission denied")
 
     return FileListResponse(root=root, files=files, total=len(files))
 
@@ -74,11 +76,14 @@ async def get_file_content(
     try:
         content = read_file(root, path)
     except PathTraversalError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        log.warning("get_file_content: path traversal — %s", exc)
+        raise HTTPException(status_code=403, detail="Path traversal detected")
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        log.warning("get_file_content: file not found — %s", exc)
+        raise HTTPException(status_code=404, detail="File not found")
     except (IsADirectoryError, ValueError) as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        log.warning("get_file_content: bad request — %s", exc)
+        raise HTTPException(status_code=400, detail="Invalid path")
 
     pipeline = get_pii_pipeline()
     sanitized, findings = pipeline.redact(content)
@@ -108,9 +113,11 @@ async def search_workspace(req: SearchRequest) -> SearchResponse:
             max_results=req.max_results,
         )
     except NotADirectoryError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
+        log.warning("search_workspace: not a directory — %s", exc)
+        raise HTTPException(status_code=400, detail="Not a directory")
     except PermissionError as exc:
-        raise HTTPException(status_code=403, detail=str(exc))
+        log.warning("search_workspace: permission denied — %s", exc)
+        raise HTTPException(status_code=403, detail="Permission denied")
 
     elapsed = int((time.monotonic() - t0) * 1000)
 

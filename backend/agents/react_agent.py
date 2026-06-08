@@ -323,7 +323,8 @@ async def run(
                         total_cache_miss_tokens += max(0, u.prompt_tokens - cached)
                         total_output_tokens += u.completion_tokens
         except Exception as exc:  # noqa: BLE001
-            yield {"type": "error", "message": _sanitize_err(f"LLM error: {exc}", api_key)}
+            log.error("LLM error in agent loop: %s", exc)
+            yield {"type": "error", "message": "LLM request failed — please try again"}
             yield {"type": "done"}
             return
 

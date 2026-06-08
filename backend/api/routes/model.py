@@ -115,7 +115,8 @@ async def model_chat(
                 max_tokens=body.max_tokens,
             )
         except Exception as exc:
-            raise HTTPException(status_code=502, detail=str(exc))
+            log.error("[CHAT] POST /model/chat  stream=false  error_type=%s", type(exc).__name__)
+            raise HTTPException(status_code=502, detail="Upstream model error")
 
         result = completion.model_dump()
         log.info(
@@ -143,7 +144,7 @@ async def _stream_chunks(
         ):
             yield f"data: {json.dumps(chunk)}\n\n"
     except Exception as exc:
-        log.error("[CHAT] POST /model/chat  stream=true  error=%s", exc)
+        log.error("[CHAT] POST /model/chat  stream=true  error_type=%s", type(exc).__name__)
         error_chunk: Dict[str, Any] = {
             "id": "error",
             "object": "chat.completion.chunk",

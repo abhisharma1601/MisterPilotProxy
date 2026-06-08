@@ -89,9 +89,10 @@ async def chat_stream(request: ChatRequest) -> EventSourceResponse:
                     "data": json.dumps({"type": "chunk", "content": chunk}),
                 }
         except Exception as exc:
+            log.error("[STREAM] POST /chat/stream  error_type=%s", type(exc).__name__)
             yield {
                 "event": "error",
-                "data": json.dumps({"type": "error", "message": str(exc)}),
+                "data": json.dumps({"type": "error", "message": "An internal error occurred"}),
             }
         finally:
             usage = usage_out[0] if usage_out else {"prompt_tokens": 0, "completion_tokens": 0}
