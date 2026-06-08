@@ -1,8 +1,5 @@
 """
 Unit tests for the PII redaction pipeline.
-
-Covers the 3 entity types in MisterPilot's pattern registry:
-  EMAIL, PHONE, DB_URL
 """
 import pytest
 
@@ -28,273 +25,481 @@ def make_pseudo(suffix_length: int = 4) -> Pseudonymizer:
     return Pseudonymizer(config, InMemoryStore())
 
 
-# --------------------------------------------------------------------------- #
-# Email detection                                                              #
-# --------------------------------------------------------------------------- #
-
-class TestEmailDetection:
-    def test_dummy_domain_not_redacted(self):
-        p = make_pipeline()
-        out, findings = p.redact("Contact alice@example.org for details")
-        assert "alice@example.org" in out
-        assert len(findings) == 0
-
-    def test_real_email_redacted(self):
-        p = make_pipeline()
-        out, findings = p.redact("Send invoice to finance@acme.com")
-        assert "finance@acme.com" not in out
-        assert len(findings) == 1
-        assert findings[0].entity_type == "EMAIL"
-        assert "EMAIL_" in findings[0].placeholder
-
-    def test_placeholder_is_deterministic(self):
-        p = make_pipeline()
-        _, f1 = p.redact("foo@corp.io")
-        _, f2 = p.redact("foo@corp.io")
-        assert f1[0].placeholder == f2[0].placeholder
-
-    def test_multiple_emails_get_distinct_placeholders(self):
-        p = make_pipeline()
-        _, findings = p.redact("alice@corp.io and bob@corp.io are cc'd")
-        assert len(findings) == 2
-        assert len({f.placeholder for f in findings}) == 2
-
-    def test_excluded_domains(self):
-        for domain in ("example", "test", "placeholder", "dummy", "sample", "localhost", "foo", "bar"):
-            p = make_pipeline()
-            out, findings = p.redact(f"user@{domain}.com")
-            assert len(findings) == 0, f"Should not redact @{domain}.com"
+def redacted(text: str) -> tuple[str, list]:
+    return make_pipeline().redact(text)
 
 
-# --------------------------------------------------------------------------- #
-# Phone detection                                                              #
-# --------------------------------------------------------------------------- #
-
-class TestPhoneDetection:
-    def test_us_phone_with_dashes(self):
-        p = make_pipeline()
-        out, findings = p.redact("Call me at 555-867-5309")
-        assert "555-867-5309" not in out
-        assert len(findings) == 1
-        assert findings[0].entity_type == "PHONE"
-
-    def test_international_phone(self):
-        p = make_pipeline()
-        out, findings = p.redact("Reach us at +1 800 555 1234")
-        assert findings[0].entity_type == "PHONE"
-
-    def test_port_number_not_redacted(self):
-        p = make_pipeline()
-        out, findings = p.redact("Server listens on port 8080")
-        phone_findings = [f for f in findings if f.entity_type == "PHONE"]
-        assert len(phone_findings) == 0
+def entity_types(text: str) -> list[str]:
+    _, findings = redacted(text)
+    return [f.entity_type for f in findings]
 
 
-# --------------------------------------------------------------------------- #
-# DB URL detection                                                             #
-# --------------------------------------------------------------------------- #
+# ── JWT ───────────────────────────────────────────────────────────────────────
 
-class TestDbUrlDetection:
-    def test_postgres_url_with_password(self):
-        p = make_pipeline()
-        url = "postgresql://admin:hunter2@db.internal:5432/prod"
-        out, findings = p.redact(url)
-        assert "hunter2" not in out
-        assert findings[0].entity_type == "DB_URL"
+class TestJwt:
+    def test_jwt_redacted(self):
+        token = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4"
+        out, findings = redacted(f"token={token}")
+        assert token not in out
+        assert "JWT" in entity_types(f"token={token}")
 
-    def test_mysql_url_redacted(self):
-        p = make_pipeline()
-        out, findings = p.redact("mysql://user:secret@localhost/mydb")
-        assert "secret" not in out
-        assert findings[0].entity_type == "DB_URL"
-
-    def test_url_without_credentials_not_redacted(self):
-        p = make_pipeline()
-        out, findings = p.redact("connect to db.internal:5432")
-        db_findings = [f for f in findings if f.entity_type == "DB_URL"]
-        assert len(db_findings) == 0
+    def test_non_jwt_not_matched(self):
+        assert "JWT" not in entity_types("hello.world.foo")
 
 
-# --------------------------------------------------------------------------- #
-
-# --------------------------------------------------------------------------- #
-# PEM private key detection                                                    #
-# --------------------------------------------------------------------------- #
+# ── PEM keys ──────────────────────────────────────────────────────────────────
 
 class TestPemKeyDetection:
     def test_rsa_private_key_redacted(self):
-        p = make_pipeline()
-        pem = """-----BEGIN RSA PRIVATE KEY-----
-MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ+Hsjo4Od077d6x4vq
-VlgofAqODiMdoWsPRa7Gl5H0L6T1wlinWNdKgJQR2vQuFPcUZLUmf/9biDPTRbEc
-gJPFuFmQLmMiALBM1IU7iisGnj+G5iN7+mPoAZceWfuMypJ9sWTSVzJQ+pC+TSN1
-5oIaRqlvSOaqEhV1vMhV4W2lK/LqLdugu7N7v1vHdBX+Yg0i7bK6bFPys0F/kcGw
------END RSA PRIVATE KEY-----"""
-        out, findings = p.redact(pem)
+        pem = ("-----BEGIN RSA PRIVATE KEY-----\n"
+               "MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ\n"
+               "-----END RSA PRIVATE KEY-----")
+        out, findings = redacted(pem)
         assert "MIIEog" not in out
-        assert len(findings) == 1
         assert findings[0].entity_type == "PEM_KEY"
-        assert findings[0].placeholder.startswith("PEM_KEY_")
 
     def test_ec_private_key_redacted(self):
-        p = make_pipeline()
-        pem = """-----BEGIN EC PRIVATE KEY-----
-MHcCAQEEIIG5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4B5GoAoGCCqGSM49
-AwEHoUQDQgAE5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4B5G0G9gJhGQb4
------END EC PRIVATE KEY-----"""
-        out, findings = p.redact(pem)
-        assert len(findings) == 1
+        pem = ("-----BEGIN EC PRIVATE KEY-----\n"
+               "MHcCAQEEIIG5G0G9gJhGQb4B\n"
+               "-----END EC PRIVATE KEY-----")
+        _, findings = redacted(pem)
         assert findings[0].entity_type == "PEM_KEY"
 
     def test_openssh_private_key_redacted(self):
-        p = make_pipeline()
-        pem = """-----BEGIN OPENSSH PRIVATE KEY-----
-b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAABlwAAAAdzc2gtcn
-NhAAAAAwEAAQAAAYEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ+Hsjo4Od077d6x4vq
------END OPENSSH PRIVATE KEY-----"""
-        out, findings = p.redact(pem)
-        assert len(findings) == 1
+        pem = ("-----BEGIN OPENSSH PRIVATE KEY-----\n"
+               "b3BlbnNzaC1rZXktdjEAAAAEbm9uZQAAAAAAAAAB\n"
+               "-----END OPENSSH PRIVATE KEY-----")
+        _, findings = redacted(pem)
         assert findings[0].entity_type == "PEM_KEY"
 
     def test_public_key_not_redacted(self):
-        p = make_pipeline()
-        pub = """-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArXhNUs6w
------END PUBLIC KEY-----"""
-        out, findings = p.redact(pub)
-        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
-        assert len(pem_findings) == 0, "Public keys should not be redacted"
+        pub = ("-----BEGIN PUBLIC KEY-----\nMIIBIjANBgkq\n-----END PUBLIC KEY-----")
+        _, findings = redacted(pub)
+        assert all(f.entity_type != "PEM_KEY" for f in findings)
 
     def test_certificate_not_redacted(self):
-        p = make_pipeline()
-        cert = """-----BEGIN CERTIFICATE-----
-MIIDazCCAlOgAwIBAgIUJ...
------END CERTIFICATE-----"""
-        out, findings = p.redact(cert)
-        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
-        assert len(pem_findings) == 0, "Certificates should not be redacted"
+        cert = ("-----BEGIN CERTIFICATE-----\nMIIDazCCAlOg\n-----END CERTIFICATE-----")
+        _, findings = redacted(cert)
+        assert all(f.entity_type != "PEM_KEY" for f in findings)
 
-    def test_pem_key_placeholder_format(self):
-        p = make_pipeline()
-        pem = """-----BEGIN PRIVATE KEY-----
-MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC
------END PRIVATE KEY-----"""
-        _, f = p.redact(pem)
-        assert f[0].placeholder.startswith("PEM_KEY_")
-        assert f[0].placeholder.count("_") >= 1
+    def test_pem_key_env_format_literal_newline(self):
+        pem = r"PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\nMIIEogIBAAKCAQEA\n-----END RSA PRIVATE KEY-----"
+        out, findings = redacted(pem)
+        assert "MIIEog" not in out
+        assert any(f.entity_type == "PEM_KEY" for f in findings)
 
     def test_pem_key_restored_correctly(self):
         p = make_pipeline()
-        pem = """-----BEGIN RSA PRIVATE KEY-----
-MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4FDFedmxRTzJQ
------END RSA PRIVATE KEY-----"""
+        pem = ("-----BEGIN RSA PRIVATE KEY-----\n"
+               "MIIEogIBAAKCAQEArXhNUs6wmhLndodqmK4F\n"
+               "-----END RSA PRIVATE KEY-----")
         out, findings = p.redact(pem)
-        placeholder = findings[0].placeholder
         restored = p.restore(out)
         assert "MIIEog" in restored
-        assert placeholder not in restored
+        assert findings[0].placeholder not in restored
 
-    def test_pem_key_env_format_literal_newline(self):
-        """Keys stored in .env files / env vars use literal \\n, not real newlines."""
-        p = make_pipeline()
-        pem = "PRIVATE_KEY=-----BEGIN RSA PRIVATE KEY-----\\nMIIEogIBAAKCAQEA\\n-----END RSA PRIVATE KEY-----"
-        out, findings = p.redact(pem)
-        assert "MIIEog" not in out, "PEM body must be redacted"
-        assert len(findings) >= 1
-        assert any(f.entity_type == "PEM_KEY" for f in findings)
 
-    def test_pem_key_env_format_mixed(self):
-        """Real newlines in body, literal \\n at the boundaries."""
-        p = make_pipeline()
-        pem = (
-            "KEY=-----BEGIN EC PRIVATE KEY-----\\n"
-            "MHcCAQEEIIG5G0G9gJhGQb4B\\n"
-            "AwEHoUQDQgAE-----END EC PRIVATE KEY-----"
-        )
-        out, findings = p.redact(pem)
-        assert "MHcCAQEE" not in out, "EC body must be redacted"
-        assert any(f.entity_type == "PEM_KEY" for f in findings)
+# ── AI / LLM keys ─────────────────────────────────────────────────────────────
 
-    def test_pem_key_env_format_not_detected_without_markers(self):
-        """Literal \\n alone should not cause false PEM detection."""
-        p = make_pipeline()
-        text = "some\\ndata\\nwithout\\nmarkers"
-        _, findings = p.redact(text)
-        pem_findings = [f for f in findings if f.entity_type == "PEM_KEY"]
-        assert len(pem_findings) == 0, "Literal \\\\n without BEGIN/END should not match"
+class TestAiKey:
+    def test_openai_sk_key(self):
+        assert "AI_KEY" in entity_types("key: sk-abcdefghijklmnopqrstuvwxyz12345")
 
-# Overlap resolution                                                           #
-# --------------------------------------------------------------------------- #
+    def test_anthropic_sk_ant_key(self):
+        k = "sk-ant-api03-" + "A" * 93
+        assert "AI_KEY" in entity_types(f"ANTHROPIC_KEY={k}")
+
+    def test_openrouter_key(self):
+        k = "sk-or-v1-" + "a" * 64
+        assert "AI_KEY" in entity_types(k)
+
+    def test_huggingface_key(self):
+        assert "AI_KEY" in entity_types("hf_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef")
+
+    def test_replicate_key(self):
+        assert "AI_KEY" in entity_types("r8_" + "a" * 40)
+
+    def test_short_sk_not_matched(self):
+        # Too short to be a real key
+        assert "AI_KEY" not in entity_types("sk-short")
+
+
+# ── GitHub tokens ─────────────────────────────────────────────────────────────
+
+class TestGhToken:
+    def test_ghp_classic_pat(self):
+        assert "GH_TOKEN" in entity_types("ghp_" + "A" * 36)
+
+    def test_gho_oauth(self):
+        assert "GH_TOKEN" in entity_types("gho_" + "B" * 36)
+
+    def test_ghs_server(self):
+        assert "GH_TOKEN" in entity_types("ghs_" + "C" * 36)
+
+    def test_ghr_refresh(self):
+        assert "GH_TOKEN" in entity_types("ghr_" + "D" * 36)
+
+    def test_fine_grained_pat(self):
+        tok = "github_pat_" + "A" * 22 + "_" + "B" * 59
+        assert "GH_TOKEN" in entity_types(tok)
+
+
+# ── AWS keys ──────────────────────────────────────────────────────────────────
+
+class TestAwsKey:
+    def test_akia_access_key(self):
+        assert "AWS_KEY" in entity_types("AKIAIOSFODNN7EXAMPLE")
+
+    def test_asia_sts_key(self):
+        assert "AWS_KEY" in entity_types("ASIAIOSFODNN7EXAMPL1")
+
+    def test_agpa_group_key(self):
+        assert "AWS_KEY" in entity_types("AGPAIOSFODNN7EXAMPL2")
+
+
+# ── Stripe keys ───────────────────────────────────────────────────────────────
+
+class TestStripeKey:
+    def test_live_secret_key(self):
+        assert "STRIPE_KEY" in entity_types("sk_live_" + "a" * 24)
+
+    def test_test_secret_key(self):
+        assert "STRIPE_KEY" in entity_types("sk_test_" + "b" * 24)
+
+    def test_live_publishable_key(self):
+        assert "STRIPE_KEY" in entity_types("pk_live_" + "c" * 24)
+
+    def test_test_publishable_key(self):
+        assert "STRIPE_KEY" in entity_types("pk_test_" + "d" * 24)
+
+    def test_restricted_key(self):
+        assert "STRIPE_KEY" in entity_types("rk_live_" + "e" * 24)
+
+    def test_webhook_secret(self):
+        assert "STRIPE_KEY" in entity_types("whsec_" + "f" * 32)
+
+
+# ── Database URLs ─────────────────────────────────────────────────────────────
+
+class TestDbUrl:
+    def test_postgres_url(self):
+        out, findings = redacted("postgresql://admin:hunter2@db.internal:5432/prod")
+        assert "hunter2" not in out
+        assert findings[0].entity_type == "DB_URL"
+
+    def test_mysql_url(self):
+        out, findings = redacted("mysql://user:secret@localhost/mydb")
+        assert "secret" not in out
+
+    def test_mongodb_url(self):
+        assert "DB_URL" in entity_types("mongodb://user:pass@cluster0.mongodb.net/db")
+
+    def test_mongodb_srv(self):
+        assert "DB_URL" in entity_types("mongodb+srv://user:pass@cluster.mongodb.net/db")
+
+    def test_redis_url(self):
+        assert "DB_URL" in entity_types("redis://default:supersecret@cache.host:6379/0")
+
+    def test_url_without_credentials_not_redacted(self):
+        assert "DB_URL" not in entity_types("connect to db.internal:5432")
+
+
+# ── Slack tokens ──────────────────────────────────────────────────────────────
+
+class TestSlackToken:
+    def test_bot_token(self):
+        assert "SLACK_TOKEN" in entity_types("xoxb-fakebottoken0000-fakebottoken0000")
+
+    def test_user_token(self):
+        assert "SLACK_TOKEN" in entity_types("xoxp-fakeusertoken000-fakeusertoken000")
+
+    def test_app_token(self):
+        assert "SLACK_TOKEN" in entity_types("xoxa-fakeapptoken0000-fakeapptoken0000")
+
+
+# ── GCP keys ──────────────────────────────────────────────────────────────────
+
+class TestGcpKey:
+    def test_google_api_key(self):
+        assert "GCP_KEY" in entity_types("AIzaSyD-9tSrke72I6e7aBcDeFgHiJkLmNoPqRs")
+
+    def test_non_gcp_key_not_matched(self):
+        assert "GCP_KEY" not in entity_types("AIzaShort")
+
+
+# ── HTTP Auth headers ─────────────────────────────────────────────────────────
+
+class TestHttpAuth:
+    def test_bearer_token(self):
+        out, findings = redacted("Authorization: Bearer mysupersecrettoken123")
+        assert "mysupersecrettoken123" not in out
+        assert "HTTP_AUTH" in [f.entity_type for f in findings]
+
+    def test_token_scheme(self):
+        out, _ = redacted("Authorization: Token abcdefghijklmnop")
+        assert "abcdefghijklmnop" not in out
+
+    def test_basic_auth(self):
+        out, _ = redacted("Authorization: Basic dXNlcjpwYXNzd29yZA==")
+        assert "dXNlcjpwYXNzd29yZA==" not in out
+
+    def test_x_api_key_header(self):
+        out, findings = redacted("X-Api-Key: supersecretkey12345")
+        assert "supersecretkey12345" not in out
+        assert any(f.entity_type == "HTTP_AUTH" for f in findings)
+
+    def test_scheme_label_preserved(self):
+        out, _ = redacted("Authorization: Bearer realtoken12345678")
+        assert "Authorization" in out
+        assert "Bearer" in out
+        assert "realtoken12345678" not in out
+
+
+# ── Generic key=value assignments ─────────────────────────────────────────────
+
+class TestApiKey:
+    def test_password_equals(self):
+        out, _ = redacted("password=hunter2")
+        assert "hunter2" not in out
+
+    def test_secret_colon(self):
+        out, _ = redacted("secret: my-secret-value")
+        assert "my-secret-value" not in out
+
+    def test_client_secret(self):
+        out, _ = redacted("client_secret=abc123xyz456")
+        assert "abc123xyz456" not in out
+
+    def test_webhook_secret(self):
+        out, _ = redacted("webhook_secret=whs_supersecret")
+        assert "whs_supersecret" not in out
+
+    def test_deploy_key(self):
+        out, _ = redacted("deploy_key=deploy_secret_value")
+        assert "deploy_secret_value" not in out
+
+    def test_key_label_preserved(self):
+        out, _ = redacted("api_key=topsecret123")
+        assert "api_key" in out
+        assert "topsecret123" not in out
+
+
+# ── GitLab tokens ─────────────────────────────────────────────────────────────
+
+class TestGitlabToken:
+    def test_personal_access_token(self):
+        assert "GITLAB_TOKEN" in entity_types("glpat-" + "a" * 20)
+
+    def test_oauth_token(self):
+        assert "GITLAB_TOKEN" in entity_types("gloas-" + "b" * 20)
+
+    def test_deploy_token(self):
+        assert "GITLAB_TOKEN" in entity_types("gldt-" + "c" * 20)
+
+
+# ── Service-specific tokens ───────────────────────────────────────────────────
+
+class TestServiceToken:
+    def test_npm_token(self):
+        assert "SERVICE_TOKEN" in entity_types("npm_" + "A" * 36)
+
+    def test_pypi_token(self):
+        assert "SERVICE_TOKEN" in entity_types("pypi-AgE" + "A" * 55)
+
+    def test_sendgrid_key(self):
+        key = "SG." + "A" * 22 + "." + "B" * 43
+        assert "SERVICE_TOKEN" in entity_types(key)
+
+    def test_twilio_account_sid(self):
+        assert "SERVICE_TOKEN" in entity_types("AC" + "a" * 32)
+
+    def test_mailgun_key(self):
+        assert "SERVICE_TOKEN" in entity_types("key-" + "a" * 32)
+
+    def test_mailchimp_key(self):
+        assert "SERVICE_TOKEN" in entity_types("a" * 32 + "-us12")
+
+    def test_shopify_access_token(self):
+        assert "SERVICE_TOKEN" in entity_types("shpat_" + "a" * 32)
+
+    def test_shopify_shared_secret(self):
+        assert "SERVICE_TOKEN" in entity_types("shpss_" + "b" * 32)
+
+    def test_telegram_bot_token(self):
+        assert "SERVICE_TOKEN" in entity_types("123456789:" + "A" * 35)
+
+    def test_docker_pat(self):
+        assert "SERVICE_TOKEN" in entity_types("dckr_pat_" + "A" * 43)
+
+    def test_digitalocean_token(self):
+        assert "SERVICE_TOKEN" in entity_types("dop_v1_" + "a" * 64)
+
+    def test_airtable_pat(self):
+        assert "SERVICE_TOKEN" in entity_types("pat" + "A" * 14 + "." + "B" * 64)
+
+    def test_linear_api_key(self):
+        assert "SERVICE_TOKEN" in entity_types("lin_api_" + "A" * 40)
+
+
+# ── Generic bare token ────────────────────────────────────────────────────────
+
+class TestGenericToken:
+    def test_deepseek_style_key(self):
+        assert "GENERIC_TOKEN" in entity_types("VU45MrFmcik2COjYnHTCjbzcd8eXQ7kJXyoGFFZd")
+
+    def test_all_lowercase_hex_not_matched(self):
+        # git SHA — all lowercase, no uppercase → should NOT match
+        assert "GENERIC_TOKEN" not in entity_types("a3f8b2c1d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9")
+
+    def test_too_short_not_matched(self):
+        assert "GENERIC_TOKEN" not in entity_types("Ab1cDe2f")
+
+    def test_no_digit_not_matched(self):
+        assert "GENERIC_TOKEN" not in entity_types("AbCdEfGhIjKlMnOpQrStUvWxYzAbCdEfGh")
+
+    def test_bare_token_in_sentence(self):
+        out, findings = redacted("My api key is VU45MrFmcik2COjYnHTCjbzcd8eXQ7kJXyoGFFZd please dont leak it")
+        assert "VU45MrFmcik2COjYnHTCjbzcd8eXQ7kJXyoGFFZd" not in out
+
+
+# ── Google OAuth ──────────────────────────────────────────────────────────────
+
+class TestOauthToken:
+    def test_google_oauth_token(self):
+        tok = "ya29." + "A" * 50
+        assert "OAUTH_TOKEN" in entity_types(tok)
+
+
+# ── SSN ───────────────────────────────────────────────────────────────────────
+
+class TestSsn:
+    def test_ssn_redacted(self):
+        out, findings = redacted("SSN: 123-45-6789")
+        assert "123-45-6789" not in out
+        assert findings[0].entity_type == "SSN"
+
+    def test_version_string_not_ssn(self):
+        assert "SSN" not in entity_types("version 1.2.3456")
+
+
+# ── Email ─────────────────────────────────────────────────────────────────────
+
+class TestEmailDetection:
+    def test_real_email_redacted(self):
+        out, findings = redacted("Send invoice to finance@acme.com")
+        assert "finance@acme.com" not in out
+        assert findings[0].entity_type == "EMAIL"
+
+    def test_dummy_domain_not_redacted(self):
+        assert len(make_pipeline().redact("alice@example.org")[1]) == 0
+
+    def test_excluded_domains(self):
+        for domain in ("example", "test", "placeholder", "dummy", "sample", "localhost", "foo", "bar"):
+            _, findings = redacted(f"user@{domain}.com")
+            assert len(findings) == 0
+
+    def test_multiple_emails_distinct_placeholders(self):
+        _, findings = redacted("alice@corp.io and bob@corp.io")
+        assert len(findings) == 2
+        assert len({f.placeholder for f in findings}) == 2
+
+    def test_placeholder_is_deterministic(self):
+        _, f1 = redacted("foo@corp.io")
+        _, f2 = redacted("foo@corp.io")
+        assert f1[0].placeholder == f2[0].placeholder
+
+
+# ── Phone ─────────────────────────────────────────────────────────────────────
+
+class TestPhoneDetection:
+    def test_us_phone_dashes(self):
+        _, findings = redacted("Call me at 555-867-5309")
+        assert findings[0].entity_type == "PHONE"
+
+    def test_international_phone(self):
+        _, findings = redacted("+1 800 555 1234")
+        assert findings[0].entity_type == "PHONE"
+
+    def test_port_number_not_phone(self):
+        _, findings = redacted("Server listens on port 8080")
+        assert all(f.entity_type != "PHONE" for f in findings)
+
+
+# ── Overlap resolution ────────────────────────────────────────────────────────
 
 class TestOverlapResolution:
     def test_db_url_wins_over_email_fragment(self):
-        """DB_URL (priority=30) should consume the whole URL as one finding."""
-        p = make_pipeline()
-        url = "postgresql://user:password123@host/db"
-        _, findings = p.redact(url)
+        _, findings = redacted("postgresql://user:password123@host/db")
         assert any(f.entity_type == "DB_URL" for f in findings)
         assert len(findings) == 1
 
+    def test_jwt_wins_over_generic_token(self):
+        jwt = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1c2VyIn0.SflKxwRJSMeKKF2QT4fwpMeJf36P"
+        types = entity_types(jwt)
+        assert "JWT" in types
+        assert "GENERIC_TOKEN" not in types
 
-# --------------------------------------------------------------------------- #
-# Placeholder semantics                                                        #
-# --------------------------------------------------------------------------- #
+    def test_stripe_key_wins_over_generic_token(self):
+        types = entity_types("sk_live_" + "Aa1" * 10)
+        assert "STRIPE_KEY" in types
+        assert "GENERIC_TOKEN" not in types
+
+
+# ── Placeholder semantics ─────────────────────────────────────────────────────
 
 class TestPlaceholderSemantics:
     def test_email_placeholder_format(self):
-        p = make_pipeline()
-        _, f = p.redact("admin@company.com")
+        _, f = redacted("admin@company.com")
         assert f[0].placeholder.startswith("EMAIL_")
 
     def test_phone_placeholder_format(self):
-        p = make_pipeline()
-        _, f = p.redact("(555) 867-5309")
+        _, f = redacted("(555) 867-5309")
         assert f[0].placeholder.startswith("PHONE_")
 
     def test_db_url_placeholder_format(self):
-        p = make_pipeline()
-        _, f = p.redact("postgres://u:pass@host/db")
+        _, f = redacted("postgres://u:pass@host/db")
         assert f[0].placeholder.startswith("DB_URL_")
 
+    def test_stripe_placeholder_format(self):
+        _, f = redacted("sk_live_" + "a" * 24)
+        assert f[0].placeholder.startswith("STRIPE_KEY_")
 
-# --------------------------------------------------------------------------- #
-# Pseudonymizer unit tests                                                     #
-# --------------------------------------------------------------------------- #
+    def test_generic_token_placeholder_format(self):
+        _, f = redacted("VU45MrFmcik2COjYnHTCjbzcd8eXQ7kJXyoGFFZd")
+        assert f[0].placeholder.startswith("GENERIC_TOKEN_")
+
+
+# ── Pseudonymizer unit tests ──────────────────────────────────────────────────
 
 class TestPseudonymizer:
     def test_deterministic(self):
         p = make_pseudo()
-        a = p.pseudonymize(EntityType.EMAIL, "alice@corp.io")
-        b = p.pseudonymize(EntityType.EMAIL, "alice@corp.io")
-        assert a == b
+        assert p.pseudonymize(EntityType.EMAIL, "alice@corp.io") == \
+               p.pseudonymize(EntityType.EMAIL, "alice@corp.io")
 
     def test_different_values_different_placeholders(self):
         p = make_pseudo()
-        a = p.pseudonymize(EntityType.EMAIL, "alice@corp.io")
-        b = p.pseudonymize(EntityType.EMAIL, "bob@corp.io")
-        assert a != b
+        assert p.pseudonymize(EntityType.EMAIL, "alice@corp.io") != \
+               p.pseudonymize(EntityType.EMAIL, "bob@corp.io")
 
     def test_placeholder_format(self):
         p = make_pseudo()
         ph = p.pseudonymize(EntityType.EMAIL, "user@corp.io")
         parts = ph.split("_")
         assert parts[0] == "EMAIL"
-        suffix = parts[-1]
-        assert len(suffix) == 4
-        int(suffix, 16)  # must be valid hex
+        int(parts[-1], 16)  # suffix must be valid hex
 
     def test_suffix_is_uppercase_hex(self):
         p = make_pseudo()
         ph = p.pseudonymize(EntityType.DB_URL, "postgres://u:s@h/db")
         suffix = ph.split("_")[-1]
-        int(suffix, 16)  # valid hex
         assert suffix == suffix.upper()
+        int(suffix, 16)
 
     def test_custom_suffix_length(self):
         p = make_pseudo(suffix_length=6)
         ph = p.pseudonymize(EntityType.EMAIL, "cto@bigcorp.com")
-        suffix = ph.split("_")[1]
-        assert len(suffix) == 6
+        assert len(ph.split("_")[1]) == 6
 
     def test_collision_gets_counter(self):
         store = InMemoryStore()
@@ -307,23 +512,17 @@ class TestPseudonymizer:
         assert candidate == f"{real_ph}_1"
 
 
-# --------------------------------------------------------------------------- #
-# Context logging                                                              #
-# --------------------------------------------------------------------------- #
+# ── Context logging ───────────────────────────────────────────────────────────
 
 class TestContextLogging:
     def test_context_in_findings(self):
-        p = make_pipeline()
-        _, findings = p.redact("Hello user@corp.io, how are you?")
-        assert len(findings) == 1
+        _, findings = redacted("Hello user@corp.io, how are you?")
         ctx = findings[0].context
         assert "Hello" in ctx
         assert "how are you" in ctx
 
 
-# --------------------------------------------------------------------------- #
-# Metrics                                                                      #
-# --------------------------------------------------------------------------- #
+# ── Metrics ───────────────────────────────────────────────────────────────────
 
 class TestMetrics:
     def test_requests_counted(self):

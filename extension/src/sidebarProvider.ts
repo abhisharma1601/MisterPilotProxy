@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { exec, ExecException } from 'child_process';
 import * as vscode from 'vscode';
@@ -20,6 +21,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private _abortController: AbortController | null = null;
   private _pendingLocalOps: Map<string, PendingLocalOp> = new Map();
+  private _reinitTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly _context: vscode.ExtensionContext) {}
 
@@ -37,6 +39,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     view.webview.html = this._buildHtml(view.webview);
 
+    // On first install VS Code's webview renderer sometimes fails to execute the
+    // script on the very first resolveWebviewView call (blank panel). If the React
+    // app doesn't send 'ready' within 3 s, force a fresh render by re-assigning html.
+    if (this._reinitTimer) clearTimeout(this._reinitTimer);
+    this._reinitTimer = setTimeout(() => {
+      this._reinitTimer = null;
+      if (this._view?.webview) {
+        this._view.webview.html = '';
+        this._view.webview.html = this._buildHtml(this._view.webview);
+      }
+    }, 3000);
+
     view.onDidChangeVisibility(() => {
       if (view.visible) {
         this._postWorkspaceRoot(view.webview);
@@ -47,6 +61,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     view.webview.onDidReceiveMessage(async (msg: WebviewMessage) => {
       switch (msg.type) {
         case 'ready':
+          if (this._reinitTimer) { clearTimeout(this._reinitTimer); this._reinitTimer = null; }
           this._postWorkspaceRoot(view.webview);
           await this._postApiKeyStatus(view.webview);
           break;
@@ -292,16 +307,49 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private async _localListFiles(workspaceRoot: string | null): Promise<string> {
     if (!workspaceRoot) return 'No workspace open';
+
+    const IGNORED = new Set([
+      'node_modules', '.git', 'dist', '__pycache__', '.venv', 'out',
+      '.next', 'build', 'coverage', '.nyc_output', '.cache', 'target', 'vendor',
+    ]);
+
+    const lines: string[] = [];
+    let fileCount = 0;
+    const MAX_FILES = 500;
+
+    const walk = async (dir: string, indent: string, depth: number): Promise<void> => {
+      if (depth > 20 || fileCount >= MAX_FILES) return;
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      // Directories first, then files — both sorted alphabetically
+      entries.sort((a, b) => {
+        if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+        return a.name.localeCompare(b.name);
+      });
+      for (const entry of entries) {
+        if (IGNORED.has(entry.name)) continue;
+        if (entry.name.startsWith('.') && !['env', 'gitignore', 'env.example'].includes(entry.name.slice(1))) continue;
+        if (entry.isDirectory()) {
+          lines.push(`${indent}${entry.name}/`);
+          await walk(path.join(dir, entry.name), indent + '  ', depth + 1);
+        } else if (entry.isFile()) {
+          lines.push(`${indent}${entry.name}`);
+          fileCount++;
+          if (fileCount >= MAX_FILES) {
+            lines.push(`${indent}... (more files omitted)`);
+            return;
+          }
+        }
+      }
+    };
+
     try {
-      const pattern = new vscode.RelativePattern(workspaceRoot, '**/*');
-      const exclude = '{**/node_modules/**,**/.git/**,**/dist/**,**/__pycache__/**,**/.venv/**,**/out/**}';
-      const files = await vscode.workspace.findFiles(pattern, exclude, 500);
-      const paths = files
-        .map(f => path.relative(workspaceRoot, f.fsPath))
-        .sort();
-      const body = paths.slice(0, 300).join('\n');
-      const suffix = paths.length > 300 ? `\n... (${paths.length - 300} more files)` : '';
-      return body + suffix || '(empty workspace)';
+      await walk(workspaceRoot, '', 0);
+      return lines.join('\n') || '(empty workspace)';
     } catch (err) {
       return `Error listing files: ${err instanceof Error ? err.message : String(err)}`;
     }
