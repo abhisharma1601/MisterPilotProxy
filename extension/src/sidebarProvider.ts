@@ -3,7 +3,8 @@ import * as path from 'path';
 import { exec, ExecException } from 'child_process';
 import * as vscode from 'vscode';
 import { BACKEND_URL } from './config.generated';
-import type { WebviewMessage } from './types';
+import type { ChatSnapshot, WebviewMessage } from './types';
+import { ChatStore } from './chatStore';
 
 function getNonce(): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -22,8 +23,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private _abortController: AbortController | null = null;
   private _pendingLocalOps: Map<string, PendingLocalOp> = new Map();
   private _reinitTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly _chatStore: ChatStore;
 
-  constructor(private readonly _context: vscode.ExtensionContext) {}
+  constructor(private readonly _context: vscode.ExtensionContext) {
+    this._chatStore = new ChatStore(_context);
+  }
 
   resolveWebviewView(
     view: vscode.WebviewView,
@@ -64,6 +68,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           if (this._reinitTimer) { clearTimeout(this._reinitTimer); this._reinitTimer = null; }
           this._postWorkspaceRoot(view.webview);
           await this._postApiKeyStatus(view.webview);
+          await this._restoreChats(view.webview);
           break;
         case 'chat':
           await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
@@ -87,8 +92,86 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'approveTerminal':
           await this._executeTerminal(msg.id, msg.approved, view.webview);
           break;
+        case 'newChat':
+          await this._handleNewChat(view.webview);
+          break;
+        case 'saveChat':
+          await this._handleSaveChat(msg.chatId, msg.title, msg.snapshot, view.webview);
+          break;
+        case 'loadChat':
+          await this._handleLoadChat(msg.chatId, view.webview);
+          break;
+        case 'listChats':
+          await this._postChatList(view.webview);
+          break;
+        case 'deleteChat':
+          await this._handleDeleteChat(msg.chatId, view.webview);
+          break;
+        case 'renameChat':
+          await this._chatStore.renameChat(msg.chatId, msg.title);
+          await this._postChatList(view.webview);
+          break;
       }
     });
+  }
+
+  // ── chat persistence ───────────────────────────────────────────────────────
+
+  private async _postChatList(webview: vscode.Webview): Promise<void> {
+    const chats = await this._chatStore.listChats();
+    webview.postMessage({ type: 'chatList', chats, activeChatId: this._chatStore.getActiveChatId() });
+  }
+
+  // Restore the last-active chat on startup, or hand the webview a fresh chat id.
+  private async _restoreChats(webview: vscode.Webview): Promise<void> {
+    await this._postChatList(webview);
+    const activeId = this._chatStore.getActiveChatId();
+    if (activeId) {
+      const chat = await this._chatStore.loadChat(activeId);
+      if (chat) {
+        webview.postMessage({ type: 'chatLoaded', chat });
+        return;
+      }
+    }
+    const id = this._chatStore.newChatId();
+    await this._chatStore.setActiveChatId(id);
+    webview.postMessage({ type: 'chatCreated', chatId: id });
+  }
+
+  private async _handleNewChat(webview: vscode.Webview): Promise<void> {
+    const id = this._chatStore.newChatId();
+    await this._chatStore.setActiveChatId(id);
+    webview.postMessage({ type: 'chatCreated', chatId: id });
+  }
+
+  private async _handleSaveChat(
+    chatId: string,
+    title: string,
+    snapshot: ChatSnapshot,
+    webview: vscode.Webview
+  ): Promise<void> {
+    await this._chatStore.saveChat(chatId, title, snapshot);
+    await this._chatStore.setActiveChatId(chatId);
+    await this._postChatList(webview);
+  }
+
+  private async _handleLoadChat(chatId: string, webview: vscode.Webview): Promise<void> {
+    const chat = await this._chatStore.loadChat(chatId);
+    if (!chat) return;
+    await this._chatStore.setActiveChatId(chatId);
+    webview.postMessage({ type: 'chatLoaded', chat });
+    await this._postChatList(webview);
+  }
+
+  private async _handleDeleteChat(chatId: string, webview: vscode.Webview): Promise<void> {
+    await this._chatStore.deleteChat(chatId);
+    // If we deleted the active chat, start a fresh one so the panel isn't orphaned.
+    if (!this._chatStore.getActiveChatId()) {
+      const id = this._chatStore.newChatId();
+      await this._chatStore.setActiveChatId(id);
+      webview.postMessage({ type: 'chatCreated', chatId: id });
+    }
+    await this._postChatList(webview);
   }
 
   // ── helpers ──────────────────────────────────────────────────────────────

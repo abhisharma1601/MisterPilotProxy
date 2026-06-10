@@ -1,8 +1,9 @@
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
+import { ChatList } from './ChatList';
 import { postToExtension } from '../vscode';
-import type { ChatMessage, ExtensionMessage } from '../types';
+import type { ChatMessage, ChatMeta, ExtensionMessage } from '../types';
 
 let _idCounter = 0;
 function uid(): string {
@@ -14,6 +15,29 @@ function isThinkingPlaceholder(prev: ChatMessage[]): boolean {
   return !!(last?.isStreaming && !last.content && !last.toolCall && !last.pendingEdit && !last.pendingTerminal);
 }
 
+// A chat title derived from its first user message.
+function deriveTitle(msgs: ChatMessage[]): string {
+  const firstUser = msgs.find((m) => m.role === 'user' && m.content.trim());
+  if (!firstUser) return 'New chat';
+  const t = firstUser.content.trim().replace(/\s+/g, ' ');
+  return t.length > 48 ? `${t.slice(0, 48)}…` : t;
+}
+
+// Pending edits/terminals can't be resumed after a reload (their local op state
+// lives in the extension host and is gone), so mark restored ones as resolved.
+function sanitizeLoaded(msgs: ChatMessage[]): ChatMessage[] {
+  return msgs.map((m) => {
+    let next = m;
+    if (m.pendingEdit?.status === 'pending') {
+      next = { ...next, pendingEdit: { ...m.pendingEdit, status: 'rejected' } };
+    }
+    if (m.pendingTerminal?.status === 'pending') {
+      next = { ...next, pendingTerminal: { ...m.pendingTerminal, status: 'denied' } };
+    }
+    return next.isStreaming ? { ...next, isStreaming: false } : next;
+  });
+}
+
 export function ChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [streaming, setStreaming] = useState(false);
@@ -22,7 +46,24 @@ export function ChatPanel() {
   const [model, setModel] = useState('deepseek-v4-pro');
   const [mode, setMode] = useState<'agent' | 'ask'>('agent');
   const [sessionCost, setSessionCost] = useState(0);
+  const [chats, setChats] = useState<ChatMeta[]>([]);
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
+  const [showChatList, setShowChatList] = useState(false);
   const INR_RATE = 96;
+
+  // Ref mirror of the active chat id so the (mount-only) message handler and the
+  // persistence effect always read the current value.
+  const activeChatIdRef = useRef<string | null>(null);
+  const setActive = useCallback((id: string | null) => {
+    activeChatIdRef.current = id;
+    setActiveChatId(id);
+  }, []);
+
+  // Set when a chat is loaded/restored so the immediately-following save effect
+  // is skipped — viewing a chat shouldn't bump its updatedAt and reorder the list.
+  const skipNextSaveRef = useRef(false);
+  // True when there are unsaved changes pending the debounce; lets us flush on hide.
+  const dirtyRef = useRef(false);
 
   // Tracks the full LLM conversation in OpenAI format for multi-turn tool use
   const llmHistoryRef = useRef<Record<string, unknown>[]>([]);
@@ -48,6 +89,35 @@ export function ChatPanel() {
 
         case 'apiKeyStatus':
           setApiKeySet(msg.isSet);
+          break;
+
+        // chat persistence
+        case 'chatList':
+          setChats(msg.chats);
+          if (!activeChatIdRef.current && msg.activeChatId) setActive(msg.activeChatId);
+          break;
+
+        case 'chatCreated':
+          setActive(msg.chatId);
+          setMessages([]);
+          llmHistoryRef.current = [];
+          pendingTurnRef.current = { content: '', toolCalls: [] };
+          setSessionCost(0);
+          setShowChatList(false);
+          break;
+
+        case 'chatLoaded':
+          skipNextSaveRef.current = true;
+          dirtyRef.current = false;
+          setActive(msg.chat.id);
+          setMessages(sanitizeLoaded(msg.chat.uiMessages as ChatMessage[]));
+          llmHistoryRef.current = msg.chat.llmHistory ?? [];
+          pendingTurnRef.current = { content: '', toolCalls: [] };
+          setModel(msg.chat.model || 'deepseek-v4-pro');
+          setMode(msg.chat.mode === 'ask' ? 'ask' : 'agent');
+          setSessionCost(msg.chat.sessionCost ?? 0);
+          setStreaming(false);
+          setShowChatList(false);
           break;
 
         // chat streaming
@@ -280,7 +350,61 @@ export function ChatPanel() {
 
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, []);
+  }, [setActive]);
+
+  // ── persistence ───────────────────────────────────────────────────────────
+
+  const postSave = useCallback(
+    (chatId: string) => {
+      postToExtension({
+        type: 'saveChat',
+        chatId,
+        title: deriveTitle(messages),
+        snapshot: {
+          uiMessages: messages,
+          llmHistory: llmHistoryRef.current,
+          model,
+          mode,
+          sessionCost,
+        },
+      });
+      dirtyRef.current = false;
+    },
+    [messages, model, mode, sessionCost]
+  );
+
+  // Debounced save at turn boundaries (never mid-stream). This also captures
+  // edit/terminal status changes, which land after streaming ends.
+  useEffect(() => {
+    if (streaming) return;
+    const chatId = activeChatIdRef.current;
+    if (!chatId || messages.length === 0) return;
+    // A load/restore just set this state — don't re-save (would bump updatedAt).
+    if (skipNextSaveRef.current) { skipNextSaveRef.current = false; return; }
+    dirtyRef.current = true;
+    const handle = setTimeout(() => postSave(chatId), 600);
+    return () => clearTimeout(handle);
+  }, [messages, streaming, model, mode, sessionCost, postSave]);
+
+  // Flush any pending unsaved change when the panel is hidden/closed, so the
+  // last turn isn't lost to the debounce window on reload.
+  useEffect(() => {
+    function onHide() {
+      if (document.visibilityState !== 'hidden') return;
+      if (!dirtyRef.current) return;
+      const chatId = activeChatIdRef.current;
+      if (!chatId || messages.length === 0) return;
+      postSave(chatId);
+    }
+    document.addEventListener('visibilitychange', onHide);
+    return () => document.removeEventListener('visibilitychange', onHide);
+  }, [messages, postSave]);
+
+  // Close the history dropdown if a stream begins while it's open (switching is
+  // blocked mid-stream anyway).
+  useEffect(() => {
+    if (streaming) setShowChatList(false);
+  }, [streaming]);
 
   // ── chat send ───────────────────────────────────────────────────────────
 
@@ -310,17 +434,36 @@ export function ChatPanel() {
     postToExtension({ type: 'stopChat' });
   }, []);
 
-  const handleClear = useCallback(() => {
-    setMessages([]);
-    llmHistoryRef.current = [];
-    pendingTurnRef.current = { content: '', toolCalls: [] };
-    setSessionCost(0);
-    postToExtension({ type: 'clearHistory' });
-  }, []);
-
   const handleSetApiKey = useCallback(() => {
     postToExtension({ type: 'setApiKey' });
   }, []);
+
+  // ── chat management ───────────────────────────────────────────────────────
+
+  const handleNewChat = useCallback(() => {
+    if (streaming) return;
+    postToExtension({ type: 'newChat' });
+  }, [streaming]);
+
+  const handleToggleChatList = useCallback(() => {
+    setShowChatList((prev) => {
+      if (!prev) postToExtension({ type: 'listChats' });
+      return !prev;
+    });
+  }, []);
+
+  // Switching/deleting while a response streams would let the in-flight stream
+  // bleed into the newly-loaded chat, so block it until the turn finishes.
+  const handleSelectChat = useCallback((chatId: string) => {
+    if (streaming) return;
+    if (chatId === activeChatIdRef.current) { setShowChatList(false); return; }
+    postToExtension({ type: 'loadChat', chatId });
+  }, [streaming]);
+
+  const handleDeleteChat = useCallback((chatId: string) => {
+    if (streaming) return;
+    postToExtension({ type: 'deleteChat', chatId });
+  }, [streaming]);
 
   // ── edit actions ────────────────────────────────────────────────────────
 
@@ -364,14 +507,40 @@ export function ChatPanel() {
         )}
         <button
           className="chat-panel__icon-btn"
+          onClick={handleNewChat}
+          disabled={streaming}
+          title="New chat"
+          aria-label="New chat"
+        >
+          ＋
+        </button>
+        <div className="chat-panel__history-wrap">
+          <button
+            className="chat-panel__icon-btn"
+            onClick={handleToggleChatList}
+            disabled={streaming}
+            title="Chat history"
+            aria-label="Chat history"
+          >
+            🕘
+          </button>
+          {showChatList && (
+            <ChatList
+              chats={chats}
+              activeChatId={activeChatId}
+              onSelect={handleSelectChat}
+              onDelete={handleDeleteChat}
+              onClose={() => setShowChatList(false)}
+            />
+          )}
+        </div>
+        <button
+          className="chat-panel__icon-btn"
           onClick={handleSetApiKey}
           title="Set API key"
           aria-label="Set API key"
         >
           🔑
-        </button>
-        <button className="chat-panel__icon-btn" onClick={handleClear} aria-label="Clear history">
-          🗑
         </button>
       </div>
 
