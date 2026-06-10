@@ -43,7 +43,7 @@ class ChatCompletionRequest(BaseModel):
     messages: List[Message]
     stream: bool = False
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     apikey: Optional[str] = None
 
 

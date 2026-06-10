@@ -25,7 +25,7 @@ class ChatRequest(BaseModel):
     messages: List[Message]
     model: Optional[str] = None
     temperature: float = 0.7
-    max_tokens: int = 4096
+    max_tokens: int = 8192
     system_prompt: Optional[str] = None
     workspace_root: Optional[str] = None
 

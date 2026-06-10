@@ -307,6 +307,7 @@ async def run(
                 tools=tools,
                 model=resolved_model,
                 temperature=0.3,
+                max_tokens=8192,
             ):
                 if event["type"] == "content_chunk":
                     yield {"type": "chunk", "content": event["content"]}
