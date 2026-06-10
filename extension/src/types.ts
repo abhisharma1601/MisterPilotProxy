@@ -3,16 +3,30 @@ export interface ChatMessage {
   content: string;
 }
 
+export interface ChatSnapshot {
+  uiMessages: unknown[];
+  llmHistory: Record<string, unknown>[];
+  model: string;
+  mode: string;
+  sessionCost: number;
+}
+
 export type WebviewMessage =
   | { type: 'chat'; messages: Record<string, unknown>[]; model: string; mode: 'agent' | 'ask' }
   | { type: 'ready' }
-  | { type: 'clearHistory' }
   | { type: 'stopChat' }
   | { type: 'setApiKey' }
   | { type: 'applyEdit'; editId: string }
   | { type: 'rejectEdit'; editId: string }
   | { type: 'viewDiff'; path: string; original: string; proposed: string }
-  | { type: 'approveTerminal'; id: string; approved: boolean };
+  | { type: 'approveTerminal'; id: string; approved: boolean }
+  // chat persistence
+  | { type: 'newChat' }
+  | { type: 'saveChat'; chatId: string; title: string; snapshot: ChatSnapshot }
+  | { type: 'loadChat'; chatId: string }
+  | { type: 'listChats' }
+  | { type: 'deleteChat'; chatId: string }
+  | { type: 'renameChat'; chatId: string; title: string };
 
 export type ExtensionMessage =
   | { type: 'chunk'; content: string }
@@ -28,4 +42,18 @@ export type ExtensionMessage =
   | { type: 'editError'; editId: string; message: string }
   | { type: 'terminalPending'; id: string; command: string }
   | { type: 'terminalResult'; id: string; command: string; approved: boolean; stdout: string; stderr: string; exitCode: number; durationMs: number; timedOut: boolean; error: string | null }
-  | { type: 'terminalError'; id: string; command: string; message: string };
+  | { type: 'terminalError'; id: string; command: string; message: string }
+  // chat persistence
+  | { type: 'chatList'; chats: ChatMetaDTO[]; activeChatId: string | null }
+  | { type: 'chatLoaded'; chat: StoredChatDTO }
+  | { type: 'chatCreated'; chatId: string };
+
+export interface ChatMetaDTO {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messageCount: number;
+}
+
+export interface StoredChatDTO extends ChatMetaDTO, ChatSnapshot {}
