@@ -2,7 +2,7 @@
   "name": "misterpilot",
   "displayName": "MisterPilot",
   "description": "AI coding assistant powered by DeepSeek",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "misterpilot",
   "engines": {
     "vscode": "^1.85.0"
