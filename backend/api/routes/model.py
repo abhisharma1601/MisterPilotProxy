@@ -24,7 +24,8 @@ from pydantic import BaseModel
 
 from ...llm.deepseek_client import get_deepseek_client
 from ...logging_config import log_pii_findings
-from ...services.key_service import resolve_api_key
+from ...services.cost_service import get_cost_service
+from ...services.key_service import key_type, resolve_api_key
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("model")
@@ -98,10 +99,15 @@ async def model_chat(
     # A MisterPilot key (mp_…) is swapped for our DeepSeek key from .env;
     # a real DeepSeek key is passed through unchanged.
     client = get_deepseek_client(resolve_api_key(api_key))
+    # Key type drives billing: MisterPilot keys carry a profit margin, DeepSeek
+    # keys are charged the raw cost.
+    client_key_type = key_type(api_key)
+    cost_service = get_cost_service()
 
     if body.stream:
         return StreamingResponse(
-            _stream_chunks(client, messages, body, num_findings),
+            _stream_chunks(client, messages, body, num_findings,
+                           cost_service, client_key_type),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -122,12 +128,29 @@ async def model_chat(
             raise HTTPException(status_code=502, detail="Upstream model error")
 
         result = completion.model_dump()
+        usage = result.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        prompt_details = usage.get("prompt_tokens_details", {})
+        cache_hit = prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0
+        cache_miss = prompt_tokens - cache_hit
+        cost_usd = cost_service.calc_cost(
+            body.model or None,
+            output=completion_tokens,
+            cache_hit=cache_hit,
+            cache_miss=cache_miss,
+            key_type=client_key_type,
+        )
         log.info(
-            "[CHAT] POST /model/chat  stream=false  model=%s  redacted=%d  in=%d out=%d",
+            "[CHAT] POST /model/chat  stream=false  model=%s  redacted=%d  in=%d out=%d  cache_hit=%d cache_miss=%d cost_usd=%.8f key_type=%s",
             body.model,
             num_findings,
-            result.get("usage", {}).get("prompt_tokens", 0),
-            result.get("usage", {}).get("completion_tokens", 0),
+            prompt_tokens,
+            completion_tokens,
+            cache_hit,
+            cache_miss,
+            cost_usd,
+            client_key_type,
         )
         return JSONResponse(content=result)
 
@@ -137,6 +160,8 @@ async def _stream_chunks(
     messages: List[Dict[str, Any]],
     body: ChatCompletionRequest,
     num_findings: int,
+    cost_service,
+    client_key_type: str,
 ) -> AsyncIterator[str]:
     try:
         async for chunk in client.stream_chat_raw(
@@ -145,6 +170,33 @@ async def _stream_chunks(
             temperature=body.temperature,
             max_tokens=body.max_tokens,
         ):
+            # Capture usage from the final chunk (DeepSeek sends it with
+            # stream_options={"include_usage": True}) and log the cost.
+            if "usage" in chunk and chunk["usage"]:
+                u = chunk["usage"]
+                prompt_tokens = u.get("prompt_tokens", 0)
+                completion_tokens = u.get("completion_tokens", 0)
+                prompt_details = u.get("prompt_tokens_details", {}) or {}
+                cache_hit = prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0
+                cache_miss = prompt_tokens - cache_hit
+                cost_usd = cost_service.calc_cost(
+                    body.model or None,
+                    output=completion_tokens,
+                    cache_hit=cache_hit,
+                    cache_miss=cache_miss,
+                    key_type=client_key_type,
+                )
+                log.info(
+                    "[CHAT] POST /model/chat  stream=true  model=%s  redacted=%d  in=%d out=%d  cache_hit=%d cache_miss=%d cost_usd=%.8f key_type=%s",
+                    body.model,
+                    num_findings,
+                    prompt_tokens,
+                    completion_tokens,
+                    cache_hit,
+                    cache_miss,
+                    cost_usd,
+                    client_key_type,
+                )
             yield f"data: {json.dumps(chunk)}\n\n"
     except Exception as exc:
         log.error("[CHAT] POST /model/chat  stream=true  error_type=%s", type(exc).__name__)
