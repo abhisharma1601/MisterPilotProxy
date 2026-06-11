@@ -20,11 +20,16 @@ from typing import Optional
 
 from ..config import get_config
 
-# MisterPilot-issued keys look like "mp_34982349343".
-MISTERPILOT_KEY_PREFIX = "mp_"
+# MisterPilot-issued keys look like "mp-34982349343".
+MISTERPILOT_KEY_PREFIX = "mp-"
 
 # Environment variable holding our own DeepSeek key (used for MisterPilot keys).
 DEEPSEEK_ENV_VAR = "DEEPSEEK_API_KEY"
+
+# Key types — what kind of key the client sent. Drives both key resolution and
+# cost calculation (MisterPilot keys are billed with a profit margin).
+KEY_TYPE_MISTERPILOT = "misterpilot"
+KEY_TYPE_DEEPSEEK = "deepseek"
 
 
 def _load_env(path: str | None = None) -> None:
@@ -47,8 +52,13 @@ def _load_env(path: str | None = None) -> None:
 
 
 def is_misterpilot_key(key: Optional[str]) -> bool:
-    """True if ``key`` is a MisterPilot-issued token (``mp_…``)."""
+    """True if ``key`` is a MisterPilot-issued token (``mp-…``)."""
     return bool(key) and key.startswith(MISTERPILOT_KEY_PREFIX)
+
+
+def key_type(key: Optional[str]) -> str:
+    """Classify an inbound key as ``KEY_TYPE_MISTERPILOT`` or ``KEY_TYPE_DEEPSEEK``."""
+    return KEY_TYPE_MISTERPILOT if is_misterpilot_key(key) else KEY_TYPE_DEEPSEEK
 
 
 def _deepseek_key_from_env() -> str:
@@ -60,7 +70,7 @@ def _deepseek_key_from_env() -> str:
 def resolve_api_key(key: Optional[str]) -> str:
     """Resolve an inbound header key to an actual DeepSeek key.
 
-    - MisterPilot key (``mp_…``) → our DeepSeek key from the environment.
+    - MisterPilot key (``mp-…``) → our DeepSeek key from the environment.
     - Anything else → used as-is (assumed to already be a real DeepSeek key).
     """
     if is_misterpilot_key(key):

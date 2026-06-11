@@ -10,7 +10,7 @@ from ...agents import react_agent
 from ...logging_config import log_pii_findings
 from ...services.approval_registry import get_approval_registry
 from ...services.cost_service import AVAILABLE_MODELS, get_cost_service
-from ...services.key_service import resolve_api_key
+from ...services.key_service import key_type, resolve_api_key
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("agent")
@@ -76,15 +76,20 @@ async def agent_stream(
         and last_user_original != last_user_sanitized
     )
 
-    # Resolve the inbound header key: a MisterPilot key (ms_…) is swapped for our
+    # Resolve the inbound header key: a MisterPilot key (mp_…) is swapped for our
     # own DeepSeek key from .env; a real DeepSeek key is passed through unchanged.
     deepseek_key = resolve_api_key(x_api_key)
+    # Key type drives billing: MisterPilot keys carry a profit margin, DeepSeek
+    # keys are charged the raw cost.
+    client_key_type = key_type(x_api_key)
 
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
     usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
 
     async def generate():
+        print(deepseek_key)
+        print(client_key_type)
         if input_was_redacted:
             yield {"data": json.dumps({"type": "sanitized_input", "content": last_user_sanitized})}
         try:
@@ -98,7 +103,8 @@ async def agent_stream(
                         event.get("model"),
                         event.get("output_tokens", 0),
                         event.get("cache_hit_tokens", 0),
-                        event.get("cache_miss_tokens", 0)
+                        event.get("cache_miss_tokens", 0),
+                        key_type=client_key_type,
                     )
                     yield {"data": json.dumps({"type": "cost", "usd": cost_usd})}
                     continue

@@ -1,5 +1,7 @@
 from typing import Dict, Optional
 
+from .key_service import KEY_TYPE_MISTERPILOT
+
 # Models we expose to clients and can price.
 AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
 
@@ -44,14 +46,22 @@ class CostService:
         output: int,
         cache_hit: int,
         cache_miss: int,
+        key_type: str,
     ) -> float:
+        """Cost in USD for the given usage.
+
+        ``key_type`` is required: MisterPilot keys are billed with the profit
+        margin applied; DeepSeek keys are charged the raw provider cost.
+        """
         p = self._pricing.get(model or "", self._pricing[self._default_model])
         raw_cost = (
             output * p["output"]
             + cache_hit * p["cache_hit"]
             + cache_miss * p["cache_miss"]
         )
-        return raw_cost * (1 + self.profit_margin / 100)
+        if key_type == KEY_TYPE_MISTERPILOT:
+            return raw_cost * (1 + self.profit_margin / 100)
+        return raw_cost
 
 
 _service: Optional[CostService] = None
