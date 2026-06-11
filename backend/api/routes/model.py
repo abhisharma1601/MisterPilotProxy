@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from ...llm.deepseek_client import get_deepseek_client
 from ...logging_config import log_pii_findings
+from ...services.key_service import resolve_api_key
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("model")
@@ -94,7 +95,9 @@ async def model_chat(
         )
 
     messages, num_findings = _sanitize_messages(body.messages, "/model/chat")
-    client = get_deepseek_client(api_key)
+    # A MisterPilot key (mp_…) is swapped for our DeepSeek key from .env;
+    # a real DeepSeek key is passed through unchanged.
+    client = get_deepseek_client(resolve_api_key(api_key))
 
     if body.stream:
         return StreamingResponse(
