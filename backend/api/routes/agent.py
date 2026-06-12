@@ -88,8 +88,6 @@ async def agent_stream(
     usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
 
     async def generate():
-        print(deepseek_key)
-        print(client_key_type)
         if input_was_redacted:
             yield {"data": json.dumps({"type": "sanitized_input", "content": last_user_sanitized})}
         try:

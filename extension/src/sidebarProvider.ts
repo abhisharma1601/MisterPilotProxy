@@ -456,16 +456,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const grepCmd = `grep -r --fixed-strings ${caseFlag} -n -m 50 ${globArg} ${JSON.stringify(escaped)} .`;
 
       let output = '';
-      try {
-        const result = await this._execLocal(rgCmd, workspaceRoot);
-        if (result.exitCode === 0 || result.stdout) {
-          output = result.stdout;
-        }
-      } catch {
-        // rg not available, try grep
+      // Try ripgrep first; _execLocal always resolves so check exit code
+      const rgResult = await this._execLocal(rgCmd, workspaceRoot);
+      if (rgResult.exitCode === 0 && rgResult.stdout) {
+        output = rgResult.stdout;
+      } else {
+        // rg not available or no matches — fall back to grep
         try {
-          const result = await this._execLocal(grepCmd, workspaceRoot);
-          output = result.stdout;
+          const grepResult = await this._execLocal(grepCmd, workspaceRoot);
+          if (grepResult.exitCode === 0 && grepResult.stdout) {
+            output = grepResult.stdout;
+          } else if (grepResult.exitCode !== 0 && grepResult.stderr) {
+            return `Error searching: ${grepResult.stderr.trim()}`;
+          }
         } catch (grepErr) {
           return `Error searching: ${grepErr instanceof Error ? grepErr.message : String(grepErr)}`;
         }
@@ -526,6 +529,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     if (!original.includes(oldText)) {
       await this._submitToolResult(callId, `Text to replace not found in ${filePath}`);
+      return;
+    }
+
+    // Guard: old_text must identify a single, unambiguous location
+    const occurrences = original.split(oldText).length - 1;
+    if (occurrences > 1) {
+      await this._submitToolResult(
+        callId,
+        `Error: old_text appears ${occurrences} times in ${filePath}. Provide a larger string with more surrounding context to make it unique (e.g. include the line above/below or adjacent code).`
+      );
       return;
     }
 
