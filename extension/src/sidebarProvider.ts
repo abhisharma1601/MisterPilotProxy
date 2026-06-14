@@ -396,8 +396,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
       const raw = Buffer.from(bytes).toString('utf-8');
       const lines = raw.split('\n');
-      const numbered = lines.slice(0, 150).map((l, i) => `${i + 1}: ${l}`).join('\n');
-      const suffix = lines.length > 150 ? `\n... (${lines.length - 150} more lines)` : '';
+      const numbered = lines.map((l, i) => `${i + 1}: ${l}`).join('\n');
+      const suffix = '';
       return numbered + suffix;
     } catch (err) {
       return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
