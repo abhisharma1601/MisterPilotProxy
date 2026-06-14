@@ -290,12 +290,9 @@ async def run(
         *clean_messages,
     ]
 
-    total_output_tokens = 0
-    total_cache_hit_tokens = 0
-    total_cache_miss_tokens = 0
     resolved_model = model or cfg.deepseek.model
 
-    while True:
+    for _iteration in range(50):
         # ── LLM call (streaming) ─────────────────────────────────────────────
         message_content: Optional[str] = None
         tool_calls: Optional[List[Dict[str, Any]]] = None
@@ -320,9 +317,17 @@ async def run(
                         cached = 0
                         if hasattr(u, "prompt_tokens_details") and u.prompt_tokens_details:
                             cached = getattr(u.prompt_tokens_details, "cached_tokens", 0) or 0
-                        total_cache_hit_tokens += cached
-                        total_cache_miss_tokens += max(0, u.prompt_tokens - cached)
-                        total_output_tokens += u.completion_tokens
+                        turn_cache_hit = cached
+                        turn_cache_miss = max(0, u.prompt_tokens - cached)
+                        turn_output = u.completion_tokens
+                        # Emit usage immediately so cost is tracked even if user stops
+                        yield {
+                            "type": "usage",
+                            "model": resolved_model,
+                            "output_tokens": turn_output,
+                            "cache_hit_tokens": turn_cache_hit,
+                            "cache_miss_tokens": turn_cache_miss,
+                        }
         except Exception as exc:  # noqa: BLE001
             log.error("LLM error in agent loop: %s", exc)
             yield {"type": "error", "message": "LLM request failed — please try again"}
@@ -331,13 +336,6 @@ async def run(
 
         # ── Final answer ──────────────────────────────────────────────────────
         if finish_reason == "stop" or not tool_calls:
-            yield {
-                "type": "usage",
-                "model": resolved_model,
-                "output_tokens": total_output_tokens,
-                "cache_hit_tokens": total_cache_hit_tokens,
-                "cache_miss_tokens": total_cache_miss_tokens,
-            }
             yield {"type": "done"}
             return
 
@@ -396,3 +394,5 @@ async def run(
                 "content": sanitized_tool_result[:300],
             }
 
+    yield {"type": "chunk", "content": "\n\n⚠️ Reached maximum iteration limit. Task may be incomplete."}
+    yield {"type": "done"}

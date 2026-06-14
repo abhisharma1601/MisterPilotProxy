@@ -83,7 +83,11 @@ async def agent_stream(
     llm_key = resolve_api_key(x_api_key)
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
-    usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+    # Accumulated token counts across all LLM turns — billed once at end.
+    accumulated: Dict[str, Any] = {
+        "output": 0, "cache_hit": 0, "cache_miss": 0,
+        "model": model, "billed": False,
+    }
 
     async def generate():
         if input_was_redacted:
@@ -93,25 +97,31 @@ async def agent_stream(
                 messages, request.workspace_root, api_key=llm_key, model=model, mode=mode
             ):
                 if event.get("type") == "usage":
-                    usage["prompt_tokens"] = event.get("cache_hit_tokens", 0) + event.get("cache_miss_tokens", 0)
-                    usage["completion_tokens"] = event.get("output_tokens", 0)
-                    data = await cost_service.calc_cost(
-                        model=event.get("model"),
-                        output=event.get("output_tokens", 0),
-                        cache_hit=event.get("cache_hit_tokens", 0),
-                        cache_miss=event.get("cache_miss_tokens", 0),
-                        api_key=x_api_key,
-                    )
-                    yield {
-                        "data": json.dumps({
-                            "type": "cost",
-                            "usd": data["costUsd"],
-                            "inr": data.get("costInr"),
-                        })
-                    }
+                    # Accumulate — do NOT call cost service yet
+                    accumulated["output"] += event.get("output_tokens", 0)
+                    accumulated["cache_hit"] += event.get("cache_hit_tokens", 0)
+                    accumulated["cache_miss"] += event.get("cache_miss_tokens", 0)
+                    accumulated["model"] = event.get("model") or accumulated["model"]
                     continue
                 yield {"data": json.dumps(event)}
                 if event.get("type") == "done":
+                    # Natural completion — bill once and send cost to client
+                    if accumulated["output"] or accumulated["cache_hit"] or accumulated["cache_miss"]:
+                        data = await cost_service.calc_cost(
+                            model=accumulated["model"],
+                            output=accumulated["output"],
+                            cache_hit=accumulated["cache_hit"],
+                            cache_miss=accumulated["cache_miss"],
+                            api_key=x_api_key,
+                        )
+                        accumulated["billed"] = True
+                        yield {
+                            "data": json.dumps({
+                                "type": "cost",
+                                "usd": data["costUsd"],
+                                "inr": data.get("costInr"),
+                            })
+                        }
                     break
         except LLMAuthError as exc:
             log.warning("[STREAM] POST /agent/stream  auth_error")
@@ -121,10 +131,22 @@ async def agent_stream(
             yield {"data": json.dumps({"type": "error", "message": "An internal error occurred"})}
             yield {"data": json.dumps({"type": "done"})}
         finally:
+            # User stopped mid-stream — bill server-side without yielding to client
+            if not accumulated["billed"] and (accumulated["output"] or accumulated["cache_hit"] or accumulated["cache_miss"]):
+                try:
+                    await cost_service.calc_cost(
+                        model=accumulated["model"],
+                        output=accumulated["output"],
+                        cache_hit=accumulated["cache_hit"],
+                        cache_miss=accumulated["cache_miss"],
+                        api_key=x_api_key,
+                    )
+                except Exception:
+                    pass
             log.info(
                 "[STREAM] POST /agent/stream  mode=%s  model=%s  redacted=%d  out=%d in=%d",
                 mode, model or "default",
-                len(all_findings), usage["prompt_tokens"], usage["completion_tokens"],
+                len(all_findings), accumulated["cache_hit"] + accumulated["cache_miss"], accumulated["output"],
             )
 
     return EventSourceResponse(generate())

@@ -5,7 +5,6 @@ from typing import Dict, Optional
 import httpx
 
 from .key_service import _load_env
-from ..models import DEFAULT_MODEL
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +54,7 @@ class CostService:
                     "outputTokens": output,
                     "cacheHitTokens": cache_hit,
                     "cacheMissTokens": cache_miss,
-                    "model": model or DEFAULT_MODEL,
+                    "model": model,
                 },
                 timeout=10.0,
             )

@@ -124,7 +124,6 @@ async def model_chat(
 
     messages, num_findings = _sanitize_messages(body.messages, "/model/chat")
     client = get_deepseek_client(resolved_key)
-    client_key_type = key_type(api_key)
     cost_service = get_cost_service()
 
     if body.stream:
