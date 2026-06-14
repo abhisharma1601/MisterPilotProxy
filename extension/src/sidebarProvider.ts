@@ -59,6 +59,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (view.visible) {
         this._postWorkspaceRoot(view.webview);
         void this._postApiKeyStatus(view.webview);
+        void this._postModels(view.webview);
       }
     });
 
@@ -69,6 +70,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._postWorkspaceRoot(view.webview);
           await this._postApiKeyStatus(view.webview);
           await this._restoreChats(view.webview);
+          await this._postModels(view.webview);
           break;
         case 'chat':
           await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
@@ -184,6 +186,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async _postApiKeyStatus(webview: vscode.Webview): Promise<void> {
     const key = await this._context.secrets.get('misterpilot.apiKey');
     webview.postMessage({ type: 'apiKeyStatus', isSet: !!key });
+  }
+
+  private async _postModels(webview: vscode.Webview): Promise<void> {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agent/models`);
+      if (res.ok) {
+        const data = await res.json() as { models: string[] };
+        webview.postMessage({ type: 'models', models: data.models });
+      }
+    } catch { /* backend unreachable — webview keeps its default */ }
   }
 
   private async _promptAndSaveApiKey(webview: vscode.Webview): Promise<void> {
@@ -316,7 +328,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         });
         break;
       case 'cost':
-        webview.postMessage({ type: 'cost', usd: Number(payload.usd ?? 0) });
+        webview.postMessage({
+          type: 'cost',
+          usd: Number(payload.usd ?? 0),
+          inr: payload.inr !== undefined ? Number(payload.inr) : undefined,
+        });
         break;
     }
   }

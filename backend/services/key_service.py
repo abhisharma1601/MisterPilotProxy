@@ -18,10 +18,13 @@ from __future__ import annotations
 import os
 from typing import Optional
 
+import requests
+from fastapi import HTTPException
+
 from ..config import get_config
 
 # MisterPilot-issued keys look like "mp-34982349343".
-MISTERPILOT_KEY_PREFIX = "mp-"
+MISTERPILOT_KEY_PREFIX = "mp"
 
 # Environment variable holding our own DeepSeek key (used for MisterPilot keys).
 DEEPSEEK_ENV_VAR = "DEEPSEEK_API_KEY"
@@ -66,6 +69,27 @@ def _deepseek_key_from_env() -> str:
     _load_env()
     return os.environ.get(DEEPSEEK_ENV_VAR, "") or get_config().deepseek.api_key
 
+def _verify_url() -> str:
+    _load_env()
+    url = os.environ.get("MISTERPILOT_VERIFY_URL")
+    if not url:
+        raise RuntimeError("MISTERPILOT_VERIFY_URL is not set in .env")
+    return url
+
+def verify_misterpilot_key(key: Optional[str]) -> bool:
+    try:
+        response = requests.post(_verify_url(), json={"apiKey": key}, timeout=5)
+        response.raise_for_status()
+        return bool(response.json().get("valid", False))
+    except requests.exceptions.ConnectionError:
+        raise HTTPException(status_code=503, detail="Key verification service is unreachable")
+    except requests.exceptions.Timeout:
+        raise HTTPException(status_code=503, detail="Key verification service timed out")
+    except requests.exceptions.HTTPError:
+        return False
+    except Exception:
+        raise HTTPException(status_code=503, detail="Key verification service error")
+
 
 def resolve_api_key(key: Optional[str]) -> str:
     """Resolve an inbound header key to an actual DeepSeek key.
@@ -74,5 +98,7 @@ def resolve_api_key(key: Optional[str]) -> str:
     - Anything else → used as-is (assumed to already be a real DeepSeek key).
     """
     if is_misterpilot_key(key):
+        if(not verify_misterpilot_key(key)):
+            raise HTTPException(status_code=401, detail="Invalid or Low Balance in MisterPilot API key")
         return _deepseek_key_from_env()
     return key or ""

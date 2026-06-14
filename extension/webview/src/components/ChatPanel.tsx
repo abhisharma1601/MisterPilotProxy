@@ -44,12 +44,13 @@ export function ChatPanel() {
   const [workspaceRoot, setWorkspaceRoot] = useState<string | null>(null);
   const [apiKeySet, setApiKeySet] = useState<boolean | null>(null);
   const [model, setModel] = useState('deepseek-v4-pro');
+  const [availableModels, setAvailableModels] = useState<string[]>(['deepseek-v4-pro', 'deepseek-v4-flash']);
   const [mode, setMode] = useState<'agent' | 'ask'>('agent');
   const [sessionCost, setSessionCost] = useState(0);
+  const [sessionCostInr, setSessionCostInr] = useState(0);
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showChatList, setShowChatList] = useState(false);
-  const INR_RATE = 96;
 
   // Ref mirror of the active chat id so the (mount-only) message handler and the
   // persistence effect always read the current value.
@@ -103,6 +104,7 @@ export function ChatPanel() {
           llmHistoryRef.current = [];
           pendingTurnRef.current = { content: '', toolCalls: [] };
           setSessionCost(0);
+          setSessionCostInr(0);
           setShowChatList(false);
           break;
 
@@ -116,8 +118,13 @@ export function ChatPanel() {
           setModel(msg.chat.model || 'deepseek-v4-pro');
           setMode(msg.chat.mode === 'ask' ? 'ask' : 'agent');
           setSessionCost(msg.chat.sessionCost ?? 0);
+          setSessionCostInr(msg.chat.sessionCostInr ?? 0);
           setStreaming(false);
           setShowChatList(false);
+          break;
+
+        case 'models':
+          setAvailableModels(msg.models);
           break;
 
         // chat streaming
@@ -178,6 +185,7 @@ export function ChatPanel() {
 
         case 'cost':
           setSessionCost((prev) => prev + msg.usd);
+          if (msg.inr != null) setSessionCostInr((prev) => prev + msg.inr!);
           break;
 
         // file edits
@@ -366,11 +374,12 @@ export function ChatPanel() {
           model,
           mode,
           sessionCost,
+          sessionCostInr,
         },
       });
       dirtyRef.current = false;
     },
-    [messages, model, mode, sessionCost]
+    [messages, model, mode, sessionCost, sessionCostInr]
   );
 
   // Debounced save at turn boundaries (never mid-stream). This also captures
@@ -384,7 +393,7 @@ export function ChatPanel() {
     dirtyRef.current = true;
     const handle = setTimeout(() => postSave(chatId), 600);
     return () => clearTimeout(handle);
-  }, [messages, streaming, model, mode, sessionCost, postSave]);
+  }, [messages, streaming, model, mode, sessionCost, sessionCostInr, postSave]);
 
   // Flush any pending unsaved change when the panel is hidden/closed, so the
   // last turn isn't lost to the debounce window on reload.
@@ -552,8 +561,9 @@ export function ChatPanel() {
           disabled={streaming}
           title="Select model"
         >
-          <option value="deepseek-v4-pro">deepseek-v4-pro</option>
-          <option value="deepseek-v4-flash">deepseek-v4-flash</option>
+          {availableModels.map((m) => (
+            <option key={m} value={m}>{m}</option>
+          ))}
         </select>
         <div className="mode-toggle">
           <button
@@ -575,7 +585,7 @@ export function ChatPanel() {
         </div>
         {sessionCost > 0 && (
           <span className="session-cost" title="Session cost (resets on clear)">
-            ${sessionCost.toFixed(4)} / ₹{(sessionCost * INR_RATE).toFixed(2)}
+            ${sessionCost.toFixed(4)} / ₹{sessionCostInr.toFixed(2)}
           </span>
         )}
       </div>

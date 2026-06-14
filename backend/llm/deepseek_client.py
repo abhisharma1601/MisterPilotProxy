@@ -6,6 +6,10 @@ from openai import AsyncOpenAI, APIConnectionError, APITimeoutError, Authenticat
 from ..config import get_config
 
 
+class LLMAuthError(RuntimeError):
+    """Raised when the upstream LLM rejects the API key."""
+
+
 class DeepSeekClient:
     def __init__(self, api_key: str) -> None:
         config = get_config()
@@ -21,7 +25,7 @@ class DeepSeekClient:
     def _safe_error(self, exc: Exception) -> RuntimeError:
         """Re-raise API errors with a safe generic message — never leak upstream details."""
         if isinstance(exc, (AuthenticationError, PermissionDeniedError)):
-            return RuntimeError("LLM authentication failed — check your API key.")
+            return LLMAuthError("Invalid API key — check your DeepSeek key.")
         return RuntimeError("LLM request failed")
 
     async def stream_chat_raw(

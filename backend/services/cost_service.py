@@ -1,67 +1,66 @@
+import logging
+import os
 from typing import Dict, Optional
 
-from .key_service import KEY_TYPE_MISTERPILOT
+import httpx
 
-# Models we expose to clients and can price.
-AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
+from .key_service import _load_env
+from ..models import DEFAULT_MODEL
 
-DEFAULT_MODEL = "deepseek-v4-pro"
+log = logging.getLogger(__name__)
 
-# Per-token prices in USD, derived from DeepSeek billing data.
-PRICING: Dict[str, Dict[str, float]] = {
-    "deepseek-v4-pro": {
-        "output":     0.00000087,
-        "cache_hit":  0.000000003625,
-        "cache_miss": 0.000000435,
-    },
-    "deepseek-v4-flash": {
-        "output":     0.00000028,
-        "cache_hit":  0.0000000028,
-        "cache_miss": 0.00000014,
-    },
-}
+
+def _usage_url() -> str:
+    _load_env()
+    url = os.environ.get("USAGE_CHARGE_URL")
+    if not url:
+        raise RuntimeError("USAGE_CHARGE_URL is not set in .env")
+    return url
+    
 
 
 class CostService:
-    """Turns token usage into USD using per-model pricing."""
+    """Delegates cost calculation to the external usage API.
 
-    # Percentage markup applied on top of the raw provider cost.
-    # e.g. profit_margin = 30 means a raw cost of 100 is billed as 130.
-    profit_margin: float = 30.0
+    Two endpoints are used, transparently chosen by key type:
 
-    def __init__(
+    * ``/api/usage/charge``  — MisterPilot keys (wallet + balance).
+    * ``/api/usage/calculate`` — user-supplied DeepSeek keys (cost-only).
+    """
+
+    async def calc_cost(
         self,
-        pricing: Optional[Dict[str, Dict[str, float]]] = None,
-        default_model: str = DEFAULT_MODEL,
-        profit_margin: Optional[float] = None,
-    ) -> None:
-        self._pricing = pricing if pricing is not None else PRICING
-        self._default_model = default_model
-        if profit_margin is not None:
-            self.profit_margin = profit_margin
-
-    def calc_cost(
-        self,
+        *,
         model: Optional[str],
         output: int,
         cache_hit: int,
         cache_miss: int,
-        key_type: str,
-    ) -> float:
-        """Cost in USD for the given usage.
+        api_key: str,
+    ) -> Dict:
+        """Call the usage API and return the full response dict.
 
-        ``key_type`` is required: MisterPilot keys are billed with the profit
-        margin applied; DeepSeek keys are charged the raw provider cost.
+        The external API is expected to return at least::
+
+            {"costUsd": float, "costInr": float, ...}
+
+        Any extra fields (balanceAfter, breakdown, transactionId, …) are
+        forwarded unchanged to the extension so the UI can expose them.
         """
-        p = self._pricing.get(model or "", self._pricing[self._default_model])
-        raw_cost = (
-            output * p["output"]
-            + cache_hit * p["cache_hit"]
-            + cache_miss * p["cache_miss"]
-        )
-        if key_type == KEY_TYPE_MISTERPILOT:
-            return raw_cost * (1 + self.profit_margin / 100)
-        return raw_cost
+        url = _usage_url()
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                url,
+                json={
+                    "apiKey": api_key,
+                    "outputTokens": output,
+                    "cacheHitTokens": cache_hit,
+                    "cacheMissTokens": cache_miss,
+                    "model": model or DEFAULT_MODEL,
+                },
+                timeout=10.0,
+            )
+            resp.raise_for_status()
+            return resp.json()
 
 
 _service: Optional[CostService] = None

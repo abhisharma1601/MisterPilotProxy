@@ -9,6 +9,7 @@ export interface ChatSnapshot {
   model: string;
   mode: string;
   sessionCost: number;
+  sessionCostInr: number;
 }
 
 export type WebviewMessage =
@@ -33,7 +34,7 @@ export type ExtensionMessage =
   | { type: 'sanitized_input'; content: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
-  | { type: 'cost'; usd: number }
+  | { type: 'cost'; usd: number; inr?: number }
   | { type: 'workspaceRoot'; path: string | null }
   | { type: 'apiKeyStatus'; isSet: boolean }
   | { type: 'pendingEdit'; editId: string; path: string; diff: string; original: string; proposed: string; isNewFile: boolean }
@@ -46,7 +47,8 @@ export type ExtensionMessage =
   // chat persistence
   | { type: 'chatList'; chats: ChatMetaDTO[]; activeChatId: string | null }
   | { type: 'chatLoaded'; chat: StoredChatDTO }
-  | { type: 'chatCreated'; chatId: string };
+  | { type: 'chatCreated'; chatId: string }
+  | { type: 'models'; models: string[] };
 
 export interface ChatMetaDTO {
   id: string;
