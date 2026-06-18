@@ -9,32 +9,15 @@ from sse_starlette.sse import EventSourceResponse
 from ...agents import react_agent
 from ...logging_config import log_pii_findings
 from ...services.approval_registry import get_approval_registry
+from ...models import AVAILABLE_MODELS
+from ...services.cost_service import get_cost_service
+from ...llm.deepseek_client import LLMAuthError
+from ...services.key_service import key_type, resolve_api_key
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("agent")
 
 router = APIRouter()
-
-AVAILABLE_MODELS = ["deepseek-v4-pro", "deepseek-v4-flash"]
-
-# Per-token prices in USD, derived from DeepSeek billing data
-PRICING: dict = {
-    "deepseek-v4-pro": {
-        "output":    0.00000087,
-        "cache_hit": 0.000000003625,
-        "cache_miss": 0.000000435,
-    },
-    "deepseek-v4-flash": {
-        "output":    0.00000028,
-        "cache_hit": 0.0000000028,
-        "cache_miss": 0.00000014,
-    },
-}
-
-
-def _calc_cost(model: str, output: int, cache_hit: int, cache_miss: int) -> float:
-    p = PRICING.get(model, PRICING["deepseek-v4-pro"])
-    return output * p["output"] + cache_hit * p["cache_hit"] + cache_miss * p["cache_miss"]
 
 
 class AgentMessage(BaseModel):
@@ -64,6 +47,7 @@ async def agent_stream(
     x_api_key: Optional[str] = Header(default=None),
 ) -> EventSourceResponse:
     pipeline = get_pii_pipeline()
+    cost_service = get_cost_service()
     messages: List[Dict[str, Any]] = []
 
     all_findings: List = []
@@ -94,40 +78,75 @@ async def agent_stream(
         and last_user_original != last_user_sanitized
     )
 
+    # Resolve the inbound header key: a MisterPilot key (mp_…) is swapped for our
+    # own DeepSeek key from .env; a real DeepSeek key is passed through unchanged.
+    llm_key = resolve_api_key(x_api_key)
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
-    usage: Dict[str, int] = {"prompt_tokens": 0, "completion_tokens": 0}
+    # Accumulated token counts across all LLM turns — billed once at end.
+    accumulated: Dict[str, Any] = {
+        "output": 0, "cache_hit": 0, "cache_miss": 0,
+        "model": model, "billed": False,
+    }
 
     async def generate():
         if input_was_redacted:
             yield {"data": json.dumps({"type": "sanitized_input", "content": last_user_sanitized})}
         try:
             async for event in react_agent.run(
-                messages, request.workspace_root, api_key=x_api_key, model=model, mode=mode
+                messages, request.workspace_root, api_key=llm_key, model=model, mode=mode
             ):
                 if event.get("type") == "usage":
-                    usage["prompt_tokens"] = event.get("cache_hit_tokens", 0) + event.get("cache_miss_tokens", 0)
-                    usage["completion_tokens"] = event.get("output_tokens", 0)
-                    cost_usd = _calc_cost(
-                        event.get("model", mode),
-                        event.get("output_tokens", 0),
-                        event.get("cache_hit_tokens", 0),
-                        event.get("cache_miss_tokens", 0),
-                    )
-                    yield {"data": json.dumps({"type": "cost", "usd": cost_usd})}
+                    # Accumulate — do NOT call cost service yet
+                    accumulated["output"] += event.get("output_tokens", 0)
+                    accumulated["cache_hit"] += event.get("cache_hit_tokens", 0)
+                    accumulated["cache_miss"] += event.get("cache_miss_tokens", 0)
+                    accumulated["model"] = event.get("model") or accumulated["model"]
                     continue
                 yield {"data": json.dumps(event)}
                 if event.get("type") == "done":
+                    # Natural completion — bill once and send cost to client
+                    if accumulated["output"] or accumulated["cache_hit"] or accumulated["cache_miss"]:
+                        data = await cost_service.calc_cost(
+                            model=accumulated["model"],
+                            output=accumulated["output"],
+                            cache_hit=accumulated["cache_hit"],
+                            cache_miss=accumulated["cache_miss"],
+                            api_key=x_api_key,
+                        )
+                        accumulated["billed"] = True
+                        yield {
+                            "data": json.dumps({
+                                "type": "cost",
+                                "usd": data["costUsd"],
+                                "inr": data.get("costInr"),
+                            })
+                        }
                     break
+        except LLMAuthError as exc:
+            log.warning("[STREAM] POST /agent/stream  auth_error")
+            yield {"data": json.dumps({"type": "error", "message": str(exc), "code": 401})}
         except Exception as exc:  # noqa: BLE001
             log.error("[STREAM] POST /agent/stream  error_type=%s", type(exc).__name__)
             yield {"data": json.dumps({"type": "error", "message": "An internal error occurred"})}
             yield {"data": json.dumps({"type": "done"})}
         finally:
+            # User stopped mid-stream — bill server-side without yielding to client
+            if not accumulated["billed"] and (accumulated["output"] or accumulated["cache_hit"] or accumulated["cache_miss"]):
+                try:
+                    await cost_service.calc_cost(
+                        model=accumulated["model"],
+                        output=accumulated["output"],
+                        cache_hit=accumulated["cache_hit"],
+                        cache_miss=accumulated["cache_miss"],
+                        api_key=x_api_key,
+                    )
+                except Exception:
+                    pass
             log.info(
                 "[STREAM] POST /agent/stream  mode=%s  model=%s  redacted=%d  out=%d in=%d",
                 mode, model or "default",
-                len(all_findings), usage["prompt_tokens"], usage["completion_tokens"],
+                len(all_findings), accumulated["cache_hit"] + accumulated["cache_miss"], accumulated["output"],
             )
 
     return EventSourceResponse(generate())

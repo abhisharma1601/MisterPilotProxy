@@ -22,8 +22,10 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from ...llm.deepseek_client import get_deepseek_client
+from ...llm.deepseek_client import get_deepseek_client, LLMAuthError
 from ...logging_config import log_pii_findings
+from ...services.cost_service import get_cost_service
+from ...services.key_service import key_type, resolve_api_key
 from ...services.pii_service import get_pii_pipeline
 
 log = logging.getLogger("model")
@@ -49,14 +51,41 @@ class ChatCompletionRequest(BaseModel):
 
 # ── helpers ───────────────────────────────────────────────────────────
 
-def _extract_api_key(raw_request: Request, body: ChatCompletionRequest) -> str:
+def _resolve_key(
+    raw_request: Request, body: ChatCompletionRequest
+) -> tuple[str, str]:
+    """Return (raw_key, resolved_key).
+
+    raw_key     — key as sent by the client; used for billing/key-type checks.
+    resolved_key — key forwarded to the LLM client; mp-… tokens are swapped for
+                   our DeepSeek key loaded from the environment.
+    """
     auth = raw_request.headers.get("Authorization", "")
     if auth.startswith("Bearer "):
-        return auth[7:].strip()
-    if body.apikey:
-        return body.apikey
-    from ...config import get_config
-    return get_config().deepseek.api_key or ""
+        raw_key = auth[7:].strip()
+    elif body.apikey:
+        raw_key = body.apikey
+    else:
+        raw_key = ""
+    return raw_key, resolve_api_key(raw_key)
+
+
+async def _calc_cost_usage(
+    cost_service,
+    model: str,
+    completion_tokens: int,
+    cache_hit: int,
+    cache_miss: int,
+    api_key: str,
+) -> dict:
+    """Await cost calculation, routing to charge vs. calculate endpoint by key type."""
+    return await cost_service.calc_cost(
+        model=model,
+        output=completion_tokens,
+        cache_hit=cache_hit,
+        cache_miss=cache_miss,
+        api_key=api_key,
+    )
 
 
 def _sanitize_messages(
@@ -86,19 +115,21 @@ async def model_chat(
     body: ChatCompletionRequest,
     raw_request: Request,
 ):
-    api_key = _extract_api_key(raw_request, body)
-    if not api_key:
+    api_key, resolved_key = _resolve_key(raw_request, body)
+    if not resolved_key:
         raise HTTPException(
             status_code=401,
             detail="Missing API key. Provide it via Authorization: Bearer <key> header or body.apikey.",
         )
 
     messages, num_findings = _sanitize_messages(body.messages, "/model/chat")
-    client = get_deepseek_client(api_key)
+    client = get_deepseek_client(resolved_key)
+    cost_service = get_cost_service()
 
     if body.stream:
         return StreamingResponse(
-            _stream_chunks(client, messages, body, num_findings),
+            _stream_chunks(client, messages, body, num_findings,
+                           cost_service, api_key),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -114,17 +145,38 @@ async def model_chat(
                 temperature=body.temperature,
                 max_tokens=body.max_tokens,
             )
+        except LLMAuthError as exc:
+            raise HTTPException(status_code=401, detail=str(exc))
         except Exception as exc:
             log.error("[CHAT] POST /model/chat  stream=false  error_type=%s", type(exc).__name__)
             raise HTTPException(status_code=502, detail="Upstream model error")
 
         result = completion.model_dump()
+        usage = result.get("usage", {})
+        prompt_tokens = usage.get("prompt_tokens", 0)
+        completion_tokens = usage.get("completion_tokens", 0)
+        prompt_details = usage.get("prompt_tokens_details", {})
+        cache_hit = prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0
+        cache_miss = prompt_tokens - cache_hit
+        cost_result = await _calc_cost_usage(
+            cost_service,
+            body.model,
+            completion_tokens,
+            cache_hit,
+            cache_miss,
+            api_key,
+        )
+        cost_usd = cost_result.get("costUsd", 0.0)
         log.info(
-            "[CHAT] POST /model/chat  stream=false  model=%s  redacted=%d  in=%d out=%d",
+            "[CHAT] POST /model/chat  stream=false  model=%s  redacted=%d  in=%d out=%d  cache_hit=%d cache_miss=%d cost_usd=%.8f key_type=%s",
             body.model,
             num_findings,
-            result.get("usage", {}).get("prompt_tokens", 0),
-            result.get("usage", {}).get("completion_tokens", 0),
+            prompt_tokens,
+            completion_tokens,
+            cache_hit,
+            cache_miss,
+            cost_usd,
+            client_key_type,
         )
         return JSONResponse(content=result)
 
@@ -134,6 +186,8 @@ async def _stream_chunks(
     messages: List[Dict[str, Any]],
     body: ChatCompletionRequest,
     num_findings: int,
+    cost_service,
+    api_key: str,
 ) -> AsyncIterator[str]:
     try:
         async for chunk in client.stream_chat_raw(
@@ -142,7 +196,39 @@ async def _stream_chunks(
             temperature=body.temperature,
             max_tokens=body.max_tokens,
         ):
+            # Capture usage from the final chunk (DeepSeek sends it with
+            # stream_options={"include_usage": True}) and log the cost.
+            if "usage" in chunk and chunk["usage"]:
+                u = chunk["usage"]
+                prompt_tokens = u.get("prompt_tokens", 0)
+                completion_tokens = u.get("completion_tokens", 0)
+                prompt_details = u.get("prompt_tokens_details", {}) or {}
+                cache_hit = prompt_details.get("cached_tokens", 0) if isinstance(prompt_details, dict) else 0
+                cache_miss = prompt_tokens - cache_hit
+                cost_result = await _calc_cost_usage(
+                    cost_service,
+                    body.model,
+                    completion_tokens,
+                    cache_hit,
+                    cache_miss,
+                    api_key,
+                )
+                cost_usd = cost_result.get("costUsd", 0.0)
+                log.info(
+                    "[CHAT] POST /model/chat  stream=true  model=%s  redacted=%d  in=%d out=%d  cache_hit=%d cache_miss=%d cost_usd=%.8f key_type=%s",
+                    body.model,
+                    num_findings,
+                    prompt_tokens,
+                    completion_tokens,
+                    cache_hit,
+                    cache_miss,
+                    cost_usd,
+                    key_type(api_key),
+                )
             yield f"data: {json.dumps(chunk)}\n\n"
+    except LLMAuthError as exc:
+        log.warning("[CHAT] POST /model/chat  stream=true  auth_error")
+        yield f"data: {json.dumps({'id': 'error', 'object': 'chat.completion.chunk', 'created': int(time.time()), 'model': body.model, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': 'error'}], 'error': {'code': 401, 'message': str(exc)}})}\n\n"
     except Exception as exc:
         log.error("[CHAT] POST /model/chat  stream=true  error_type=%s", type(exc).__name__)
         error_chunk: Dict[str, Any] = {

@@ -2,7 +2,7 @@
   "name": "misterpilot",
   "displayName": "MisterPilot",
   "description": "AI coding assistant powered by DeepSeek",
-  "version": "0.1.4",
+  "version": "0.1.7",
   "publisher": "misterpilot",
   "engines": {
     "vscode": "^1.85.0"
@@ -59,6 +59,7 @@
     "cheerio": "^1.0.0",
     "eslint": "^8.56.0",
     "typescript": "^5.3.3",
-    "undici": "^6.21.1"
+    "undici": "^6.21.1",
+    "vitest": "^1.6.1"
   }
 }

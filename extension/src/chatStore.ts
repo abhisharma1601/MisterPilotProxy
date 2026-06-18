@@ -18,6 +18,7 @@ export interface ChatSnapshot {
   model: string;
   mode: string;
   sessionCost: number;
+  sessionCostInr: number;
 }
 
 export interface StoredChat extends ChatSnapshot, ChatMeta {}

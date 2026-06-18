@@ -52,6 +52,7 @@ export interface ChatSnapshot {
   model: string;
   mode: string;
   sessionCost: number;
+  sessionCostInr: number;
 }
 
 export interface StoredChat extends ChatMeta, ChatSnapshot {}
@@ -61,7 +62,7 @@ export type ExtensionMessage =
   | { type: 'sanitized_input'; content: string }
   | { type: 'done' }
   | { type: 'error'; message: string }
-  | { type: 'cost'; usd: number }
+  | { type: 'cost'; usd: number; inr?: number }
   | { type: 'workspaceRoot'; path: string | null }
   | { type: 'apiKeyStatus'; isSet: boolean }
   // edit
@@ -79,7 +80,8 @@ export type ExtensionMessage =
   // chat persistence
   | { type: 'chatList'; chats: ChatMeta[]; activeChatId: string | null }
   | { type: 'chatLoaded'; chat: StoredChat }
-  | { type: 'chatCreated'; chatId: string };
+  | { type: 'chatCreated'; chatId: string }
+  | { type: 'models'; models: string[] };
 
 export type WebviewMessage =
   | { type: 'chat'; messages: Record<string, unknown>[]; model: string; mode: 'agent' | 'ask' }

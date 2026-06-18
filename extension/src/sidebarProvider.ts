@@ -59,6 +59,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       if (view.visible) {
         this._postWorkspaceRoot(view.webview);
         void this._postApiKeyStatus(view.webview);
+        void this._postModels(view.webview);
       }
     });
 
@@ -69,6 +70,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._postWorkspaceRoot(view.webview);
           await this._postApiKeyStatus(view.webview);
           await this._restoreChats(view.webview);
+          await this._postModels(view.webview);
           break;
         case 'chat':
           await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
@@ -184,6 +186,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private async _postApiKeyStatus(webview: vscode.Webview): Promise<void> {
     const key = await this._context.secrets.get('misterpilot.apiKey');
     webview.postMessage({ type: 'apiKeyStatus', isSet: !!key });
+  }
+
+  private async _postModels(webview: vscode.Webview): Promise<void> {
+    try {
+      const res = await fetch(`${BACKEND_URL}/agent/models`);
+      if (res.ok) {
+        const data = await res.json() as { models: string[] };
+        webview.postMessage({ type: 'models', models: data.models });
+      }
+    } catch { /* backend unreachable — webview keeps its default */ }
   }
 
   private async _promptAndSaveApiKey(webview: vscode.Webview): Promise<void> {
@@ -316,7 +328,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         });
         break;
       case 'cost':
-        webview.postMessage({ type: 'cost', usd: Number(payload.usd ?? 0) });
+        webview.postMessage({
+          type: 'cost',
+          usd: Number(payload.usd ?? 0),
+          inr: payload.inr !== undefined ? Number(payload.inr) : undefined,
+        });
         break;
     }
   }
@@ -380,8 +396,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const bytes = await vscode.workspace.fs.readFile(vscode.Uri.file(abs));
       const raw = Buffer.from(bytes).toString('utf-8');
       const lines = raw.split('\n');
-      const numbered = lines.slice(0, 150).map((l, i) => `${i + 1}: ${l}`).join('\n');
-      const suffix = lines.length > 150 ? `\n... (${lines.length - 150} more lines)` : '';
+      const numbered = lines.map((l, i) => `${i + 1}: ${l}`).join('\n');
+      const suffix = '';
       return numbered + suffix;
     } catch (err) {
       return `Error reading file: ${err instanceof Error ? err.message : String(err)}`;
@@ -456,16 +472,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const grepCmd = `grep -r --fixed-strings ${caseFlag} -n -m 50 ${globArg} ${JSON.stringify(escaped)} .`;
 
       let output = '';
-      try {
-        const result = await this._execLocal(rgCmd, workspaceRoot);
-        if (result.exitCode === 0 || result.stdout) {
-          output = result.stdout;
-        }
-      } catch {
-        // rg not available, try grep
+      // Try ripgrep first; _execLocal always resolves so check exit code
+      const rgResult = await this._execLocal(rgCmd, workspaceRoot);
+      if (rgResult.exitCode === 0 && rgResult.stdout) {
+        output = rgResult.stdout;
+      } else {
+        // rg not available or no matches — fall back to grep
         try {
-          const result = await this._execLocal(grepCmd, workspaceRoot);
-          output = result.stdout;
+          const grepResult = await this._execLocal(grepCmd, workspaceRoot);
+          if (grepResult.exitCode === 0 && grepResult.stdout) {
+            output = grepResult.stdout;
+          } else if (grepResult.exitCode !== 0 && grepResult.stderr) {
+            return `Error searching: ${grepResult.stderr.trim()}`;
+          }
         } catch (grepErr) {
           return `Error searching: ${grepErr instanceof Error ? grepErr.message : String(grepErr)}`;
         }
@@ -526,6 +545,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     if (!original.includes(oldText)) {
       await this._submitToolResult(callId, `Text to replace not found in ${filePath}`);
+      return;
+    }
+
+    // Guard: old_text must identify a single, unambiguous location
+    const occurrences = original.split(oldText).length - 1;
+    if (occurrences > 1) {
+      await this._submitToolResult(
+        callId,
+        `Error: old_text appears ${occurrences} times in ${filePath}. Provide a larger string with more surrounding context to make it unique (e.g. include the line above/below or adjacent code).`
+      );
       return;
     }
 
