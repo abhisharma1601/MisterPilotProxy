@@ -2,14 +2,12 @@
 ReAct agent loop.
 
 Each iteration:
-  1. Call LLM (non-streaming, tool_choice=auto)
+  1. Call LLM (streaming, tool_choice=auto)
   2. Yield any model prose as chunks
-  3. If finish_reason=tool_calls  → delegate each tool to the extension, loop
-  4. If finish_reason=stop        → done
-
-All tool execution happens locally in the VS Code extension (which has
-filesystem and terminal access). The backend yields a tool_call_request SSE
-event and awaits the result via POST /agent/tool_result + ApprovalRegistry.
+  3. If finish_reason=tool_calls:
+       - MCP tools  → executed directly by the backend via MCPClientManager
+       - Local tools → delegated to the VS Code extension via SSE + ApprovalRegistry
+  4. If finish_reason=stop → done
 """
 
 import json
@@ -20,6 +18,12 @@ from ..config import get_config
 from ..llm.deepseek_client import get_deepseek_client
 from ..services.approval_registry import get_approval_registry
 from ..services.pii_service import get_pii_pipeline
+
+try:
+    from ..mcp.client import get_mcp_manager
+    _MCP_AVAILABLE = True
+except ImportError:
+    _MCP_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 
@@ -156,10 +160,19 @@ AGENT_TOOLS: List[Dict[str, Any]] = [
 ]
 
 
-def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
+def _build_system(
+    workspace_root: Optional[str],
+    mode: str = "agent",
+    mcp_server_names: Optional[List[str]] = None,
+) -> str:
+    identity = [
+        "You are MisterPilot, a sharp and efficient AI coding assistant embedded in VS Code.",
+        "",
+    ]
+
     if mode == "ask":
-        parts = [
-            "You are MisterPilot, an AI coding assistant running inside VS Code.",
+        parts = identity + [
+            "You are in Ask mode: answer questions, explain concepts, and read files when helpful.",
             "You are in Ask mode: answer questions, explain concepts, and read files when helpful.",
             "You MUST NOT create, modify, or delete any files.",
             "You MUST NOT run any terminal commands.",
@@ -171,11 +184,10 @@ def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
             "but do not attempt to write or modify anything.",
         ]
     else:
-        parts = [
-            "You are MisterPilot, an AI coding assistant running inside VS Code.",
+        parts = identity + [
             "You answer questions about code, explain concepts, and help implement changes.",
             "",
-            "Available tools:",
+            "## Local tools",
             "  read_file        — read a file. Use this to inspect any file.",
             "  list_files       — list workspace files.",
             "  search_code      — search for text or patterns across the workspace.",
@@ -183,7 +195,7 @@ def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
             "  replace_in_file  — replace a specific block in a file (shows diff, requires approval).",
             "  execute_terminal — run a shell command (requires approval).",
             "",
-            "Rules:",
+            "## Local tool rules",
             "  - Always use read_file to read files. NEVER use execute_terminal to cat, head, or tail a file.",
             "  - Always use search_code to search. NEVER use execute_terminal to grep or find.",
             "  - Only use execute_terminal for: builds, tests, package installs, git operations,",
@@ -191,6 +203,28 @@ def _build_system(workspace_root: Optional[str], mode: str = "agent") -> str:
             "  - Always read relevant files before making changes.",
             "  - Prefer replace_in_file over write_file when editing an existing file.",
         ]
+
+    if mcp_server_names:
+        parts += [
+            "",
+            "## Connected MCP servers",
+        ]
+        for name in mcp_server_names:
+            parts.append(f"  {name} — tools prefixed mcp__{name}__")
+        parts += [
+            "",
+            "## MCP usage rules (READ CAREFULLY)",
+            "  - Only call an MCP tool when the user's request explicitly involves that external service.",
+            "    Examples: 'create a GitHub issue' → use github MCP. 'fetch this URL' → use fetch MCP.",
+            "  - NEVER call an MCP server speculatively or 'just to check'. Only call it when needed.",
+            "  - Pick the ONE most relevant MCP server for the task. Do not call multiple MCP servers",
+            "    unless the request genuinely requires data from more than one.",
+            "  - For pure coding tasks (read files, write code, run tests) always prefer local tools.",
+            "    MCP servers are for external services, not local workspace operations.",
+            "  - If you are unsure whether an MCP tool is needed, default to NOT using it and answer",
+            "    from context or local tools first.",
+        ]
+
     if workspace_root:
         parts.append(f"\nWorkspace root: {workspace_root}")
     else:
@@ -252,6 +286,7 @@ async def run(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
     mode: str = "agent",
+    mcp_servers: Optional[Dict[str, Any]] = None,
 ) -> AsyncIterator[Dict[str, Any]]:
     """
     Main ReAct loop.  Yields SSE-compatible event dicts:
@@ -283,10 +318,23 @@ async def run(
         else:
             clean_messages.append(msg)
 
-    tools = AGENT_TOOLS if mode == "agent" else ASK_TOOLS
+    base_tools = AGENT_TOOLS if mode == "agent" else ASK_TOOLS
+
+    # Fetch MCP tools and merge them into the tool list
+    mcp_tool_list: List[Dict[str, Any]] = []
+    mcp_manager = None
+    if mcp_servers and _MCP_AVAILABLE:
+        mcp_manager = get_mcp_manager()
+        try:
+            mcp_tool_list = await mcp_manager.get_tools(mcp_servers)
+        except Exception as exc:
+            log.error("Failed to load MCP tools: %s", exc)
+
+    tools = base_tools + mcp_tool_list
+    mcp_server_names = list(mcp_servers.keys()) if mcp_servers else None
 
     context: List[Dict[str, Any]] = [
-        {"role": "system", "content": _build_system(workspace_root, mode)},
+        {"role": "system", "content": _build_system(workspace_root, mode, mcp_server_names)},
         *clean_messages,
     ]
 
@@ -358,11 +406,15 @@ async def run(
             yield {"type": "tool_call", "id": tc["id"], "tool": tool_name, "args": tool_args}
 
             tool_result_content = ""
-            async for event in _execute_tool(tool_name, tool_args, workspace_root, tc["id"]):
-                if event["type"] == "_result":
-                    tool_result_content = event["content"]
-                else:
-                    yield event  # forward pending_edit / pending_terminal to extension
+            if mcp_manager and mcp_servers and mcp_manager.is_mcp_tool(tool_name):
+                # Execute MCP tools directly in the backend — no extension round-trip needed
+                tool_result_content = await mcp_manager.call_tool(tool_name, tool_args, mcp_servers)
+            else:
+                async for event in _execute_tool(tool_name, tool_args, workspace_root, tc["id"]):
+                    if event["type"] == "_result":
+                        tool_result_content = event["content"]
+                    else:
+                        yield event  # forward pending_edit / pending_terminal to extension
 
             # Cap tool result at 8 KB to avoid blowing out the context window
             capped = tool_result_content[:8192]
@@ -391,7 +443,7 @@ async def run(
                 "type": "tool_result",
                 "id": tc["id"],
                 "tool": tool_name,
-                "content": sanitized_tool_result[:300],
+                "content": sanitized_tool_result[:4096],
             }
 
     yield {"type": "chunk", "content": "\n\n⚠️ Reached maximum iteration limit. Task may be incomplete."}

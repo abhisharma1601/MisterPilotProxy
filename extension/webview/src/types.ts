@@ -28,6 +28,12 @@ export interface PendingTerminalData {
   errorMessage?: string;
 }
 
+export interface McpServerStatus {
+  name: string;
+  connected?: boolean | null; // null = checking, true = connected, false = failed
+  toolCount?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
@@ -81,7 +87,9 @@ export type ExtensionMessage =
   | { type: 'chatList'; chats: ChatMeta[]; activeChatId: string | null }
   | { type: 'chatLoaded'; chat: StoredChat }
   | { type: 'chatCreated'; chatId: string }
-  | { type: 'models'; models: string[] };
+  | { type: 'models'; models: string[] }
+  // mcp
+  | { type: 'mcpStatus'; servers: McpServerStatus[] };
 
 export type WebviewMessage =
   | { type: 'chat'; messages: Record<string, unknown>[]; model: string; mode: 'agent' | 'ask' }
@@ -98,4 +106,5 @@ export type WebviewMessage =
   | { type: 'loadChat'; chatId: string }
   | { type: 'listChats' }
   | { type: 'deleteChat'; chatId: string }
-  | { type: 'renameChat'; chatId: string; title: string };
+  | { type: 'renameChat'; chatId: string; title: string }
+  | { type: 'openMcpSettings' };

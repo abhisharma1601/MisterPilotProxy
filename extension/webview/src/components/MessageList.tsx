@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { DiffCard } from './DiffCard';
@@ -20,18 +20,84 @@ const TOOL_ICONS: Record<string, string> = {
   execute_terminal: '⚡',
 };
 
+const MCP_SERVER_ICONS: Record<string, string> = {
+  github: '🐙',
+  azuredevops: '🟦',
+  azure: '🟦',
+  gmail: '📧',
+  google: '🔵',
+  jira: '🔷',
+  slack: '💬',
+  notion: '📝',
+  linear: '🔺',
+  gitlab: '🦊',
+};
+
+const MCP_PREFIX = 'mcp__';
+
+function parseMcpTool(tool: string): { server: string; toolName: string } | null {
+  if (!tool.startsWith(MCP_PREFIX)) return null;
+  const rest = tool.slice(MCP_PREFIX.length);
+  const idx = rest.indexOf('__');
+  if (idx === -1) return null;
+  return { server: rest.slice(0, idx), toolName: rest.slice(idx + 2) };
+}
+
 function ToolCallCard({ toolCall }: { toolCall: ToolCallData }) {
-  const icon = TOOL_ICONS[toolCall.tool] ?? '🔧';
-  const cls = `tool-call-card tool-call-card--${toolCall.status}`;
+  const [expanded, setExpanded] = useState(false);
+  const mcp = parseMcpTool(toolCall.tool);
+
+  const icon = mcp
+    ? (MCP_SERVER_ICONS[mcp.server] ?? '🔌')
+    : (TOOL_ICONS[toolCall.tool] ?? '🔧');
+
+  const displayName = mcp ? mcp.toolName.replace(/_/g, '_​') : toolCall.tool;
+  const hasResult = mcp && toolCall.status === 'done' && !!toolCall.result;
+
+  let resultDisplay = toolCall.result ?? '';
+  let isJson = false;
+  if (hasResult) {
+    try {
+      resultDisplay = JSON.stringify(JSON.parse(toolCall.result!), null, 2);
+      isJson = true;
+    } catch {}
+  }
+
+  const cardCls = [
+    'tool-call-card',
+    `tool-call-card--${toolCall.status}`,
+    mcp ? 'tool-call-card--mcp' : '',
+    hasResult ? 'tool-call-card--expandable' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className={cls}>
-      <span className="tool-call-card__icon">{icon}</span>
-      <code className="tool-call-card__name">{toolCall.tool}</code>
-      {toolCall.status === 'running' && (
-        <span className="tool-call-card__spinner" aria-label="running" />
-      )}
-      {toolCall.status === 'done' && (
-        <span className="tool-call-card__check">✓</span>
+    <div className={mcp ? 'tool-call-wrap tool-call-wrap--mcp' : 'tool-call-wrap'}>
+      <div
+        className={cardCls}
+        onClick={hasResult ? () => setExpanded((e) => !e) : undefined}
+      >
+        {mcp && (
+          <span className="tool-call-card__server-badge" title={`MCP: ${mcp.server}`}>
+            {mcp.server}
+          </span>
+        )}
+        <span className="tool-call-card__icon">{icon}</span>
+        <code className="tool-call-card__name">{displayName}</code>
+        {toolCall.status === 'running' && (
+          <span className="tool-call-card__spinner" aria-label="running" />
+        )}
+        {toolCall.status === 'done' && (
+          <span className="tool-call-card__check">✓</span>
+        )}
+        {hasResult && (
+          <span className="tool-call-card__chevron">{expanded ? '▲' : '▼'}</span>
+        )}
+      </div>
+
+      {expanded && hasResult && (
+        <pre className={`mcp-result-body${isJson ? ' mcp-result-body--json' : ''}`}>
+          {resultDisplay}
+        </pre>
       )}
     </div>
   );
@@ -109,7 +175,6 @@ function MessageItem({ msg, onApply, onReject, onViewFull, onApproveTerminal, on
     );
   }
 
-  // Thinking placeholder: streaming + empty content
   if (msg.isStreaming && !msg.content) {
     return (
       <div className="message message--assistant">
