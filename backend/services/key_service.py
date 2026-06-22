@@ -15,24 +15,30 @@ it through :func:`resolve_api_key` first, e.g.::
 """
 from __future__ import annotations
 
+import json
 import os
+import time
 from typing import Optional
 
+import boto3
 import requests
+from botocore.exceptions import ClientError
 from fastapi import HTTPException
-
-from ..config import get_config
 
 # MisterPilot-issued keys look like "mp-34982349343".
 MISTERPILOT_KEY_PREFIX = "mp"
-
-# Environment variable holding our own DeepSeek key (used for MisterPilot keys).
-DEEPSEEK_ENV_VAR = "DEEPSEEK_API_KEY"
 
 # Key types — what kind of key the client sent. Drives both key resolution and
 # cost calculation (MisterPilot keys are billed with a profit margin).
 KEY_TYPE_MISTERPILOT = "misterpilot"
 KEY_TYPE_DEEPSEEK = "deepseek"
+
+# AWS Secrets Manager config
+_AWS_SECRET_KEY_FIELD = "key"
+_SECRET_TTL_SECONDS = 300  # refresh cached secret every 5 minutes
+
+# module-level cache: secret_name -> (api_key, expires_at_monotonic)
+_secret_cache: dict[str, tuple[str, float]] = {}
 
 
 def _load_env(path: str | None = None) -> None:
@@ -64,10 +70,37 @@ def key_type(key: Optional[str]) -> str:
     return KEY_TYPE_MISTERPILOT if is_misterpilot_key(key) else KEY_TYPE_DEEPSEEK
 
 
-def _deepseek_key_from_env() -> str:
-    """Our own DeepSeek key, read from .env (falls back to config)."""
+def _aws_secret_name() -> str:
+    """Return the Secrets Manager secret name based on APP_ENV (dev or prod)."""
     _load_env()
-    return os.environ.get(DEEPSEEK_ENV_VAR, "") or get_config().deepseek.api_key
+    env = os.environ.get("APP_ENV", "dev").lower()
+    return "deepseek_prod" if env == "prod" else "deepseek_dev"
+
+
+def _fetch_deepseek_key_from_aws(secret_name: str) -> str:
+    """Fetch the DeepSeek key from AWS Secrets Manager with a TTL-based cache."""
+    now = time.monotonic()
+    cached = _secret_cache.get(secret_name)
+    if cached and now < cached[1]:
+        return cached[0]
+
+    try:
+        client = boto3.client("secretsmanager")
+        response = client.get_secret_value(SecretId=secret_name)
+        secret = json.loads(response["SecretString"])
+        api_key: str = secret[_AWS_SECRET_KEY_FIELD]
+    except (ClientError, KeyError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            f"Failed to fetch DeepSeek key from AWS Secrets Manager ({secret_name!r}): {exc}"
+        ) from exc
+
+    _secret_cache[secret_name] = (api_key, now + _SECRET_TTL_SECONDS)
+    return api_key
+
+
+def _get_deepseek_key() -> str:
+    """Fetch our DeepSeek key from AWS Secrets Manager."""
+    return _fetch_deepseek_key_from_aws(_aws_secret_name())
 
 def _verify_url() -> str:
     _load_env()
@@ -100,5 +133,5 @@ def resolve_api_key(key: Optional[str]) -> str:
     if is_misterpilot_key(key):
         if(not verify_misterpilot_key(key)):
             raise HTTPException(status_code=401, detail="Invalid or Low Balance in MisterPilot API key")
-        return _deepseek_key_from_env()
+        return _get_deepseek_key()
     return key or ""
