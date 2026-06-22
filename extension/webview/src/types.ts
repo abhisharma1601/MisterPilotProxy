@@ -89,7 +89,8 @@ export type ExtensionMessage =
   | { type: 'chatCreated'; chatId: string }
   | { type: 'models'; models: string[] }
   // mcp
-  | { type: 'mcpStatus'; servers: McpServerStatus[] };
+  | { type: 'mcpStatus'; servers: McpServerStatus[] }
+  | { type: 'mcpConfig'; config: Record<string, unknown> };
 
 export type WebviewMessage =
   | { type: 'chat'; messages: Record<string, unknown>[]; model: string; mode: 'agent' | 'ask' }
@@ -107,4 +108,6 @@ export type WebviewMessage =
   | { type: 'listChats' }
   | { type: 'deleteChat'; chatId: string }
   | { type: 'renameChat'; chatId: string; title: string }
-  | { type: 'openMcpSettings' };
+  | { type: 'openMcpSettings' }
+  | { type: 'getMcpConfig' }
+  | { type: 'saveMcpConfig'; config: Record<string, unknown> };

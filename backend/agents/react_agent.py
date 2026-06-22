@@ -173,7 +173,6 @@ def _build_system(
     if mode == "ask":
         parts = identity + [
             "You are in Ask mode: answer questions, explain concepts, and read files when helpful.",
-            "You are in Ask mode: answer questions, explain concepts, and read files when helpful.",
             "You MUST NOT create, modify, or delete any files.",
             "You MUST NOT run any terminal commands.",
             "",
@@ -214,15 +213,21 @@ def _build_system(
         parts += [
             "",
             "## MCP usage rules (READ CAREFULLY)",
-            "  - Only call an MCP tool when the user's request explicitly involves that external service.",
-            "    Examples: 'create a GitHub issue' → use github MCP. 'fetch this URL' → use fetch MCP.",
-            "  - NEVER call an MCP server speculatively or 'just to check'. Only call it when needed.",
+            "  - When the user's request involves an external service (GitHub, web fetch, etc.),",
+            "    ALWAYS use the corresponding MCP tool. Never guess, assume, or hallucinate data",
+            "    that an MCP tool can retrieve — call the tool instead.",
+            "  - GitHub operations (list repos, search code, create issues, get PRs, etc.) MUST",
+            "    use the github MCP tool. NEVER assume or guess the user's GitHub username or repo",
+            "    names — the MCP server is authenticated and will return the correct data.",
+            "  - When the user asks for THEIR OWN repos and you don't know their GitHub username,",
+            "    run `git remote get-url origin` via execute_terminal to extract it from the",
+            "    workspace. Parse the owner from the URL (e.g. github.com/<owner>/<repo>),",
+            "    then use search_repositories with 'user:<owner>'. NEVER guess from folder names.",
             "  - Pick the ONE most relevant MCP server for the task. Do not call multiple MCP servers",
             "    unless the request genuinely requires data from more than one.",
             "  - For pure coding tasks (read files, write code, run tests) always prefer local tools.",
             "    MCP servers are for external services, not local workspace operations.",
-            "  - If you are unsure whether an MCP tool is needed, default to NOT using it and answer",
-            "    from context or local tools first.",
+            "  - NEVER call an MCP server speculatively or 'just to check'. Only call it when needed.",
         ]
 
     if workspace_root:
@@ -378,7 +383,7 @@ async def run(
                         }
         except Exception as exc:  # noqa: BLE001
             log.error("LLM error in agent loop: %s", exc)
-            yield {"type": "error", "message": "LLM request failed — please try again"}
+            yield {"type": "error", "message": _sanitize_err("LLM request failed — please try again", api_key)}
             yield {"type": "done"}
             return
 

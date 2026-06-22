@@ -28,7 +28,9 @@ export type WebviewMessage =
   | { type: 'listChats' }
   | { type: 'deleteChat'; chatId: string }
   | { type: 'renameChat'; chatId: string; title: string }
-  | { type: 'openMcpSettings' };
+  | { type: 'openMcpSettings' }
+  | { type: 'getMcpConfig' }
+  | { type: 'saveMcpConfig'; config: Record<string, unknown> };
 
 export type ExtensionMessage =
   | { type: 'chunk'; content: string }

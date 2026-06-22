@@ -64,31 +64,50 @@ class _ServerSession:
 
     async def _run(self) -> None:
         try:
-            try:
-                from mcp.client.stdio import stdio_client, StdioServerParameters
-                from mcp import ClientSession
-            except ImportError:
-                from mcp import ClientSession, StdioServerParameters  # type: ignore[no-redef]
-                from mcp.client.stdio import stdio_client  # type: ignore[no-redef]
+            from mcp import ClientSession
 
-            env = self._config.get("env") or None
-            params = StdioServerParameters(
-                command=self._config["command"],
-                args=self._config.get("args", []),
-                env=env,
-            )
-            async with stdio_client(params) as (read, write):
-                async with ClientSession(read, write) as session:
-                    await session.initialize()
-                    self._session = session
-                    self._ready.set()
-                    log.info("MCP server '%s' ready", self.name)
-                    # Block here — keeps process + session alive
-                    await self._shutdown.wait()
+            if self._config.get("type") == "http":
+                await self._run_http(ClientSession)
+            else:
+                await self._run_stdio(ClientSession)
         except Exception as exc:
             log.error("MCP server '%s' connection error: %s", self.name, exc)
             self._start_error = exc
             self._ready.set()
+
+    async def _run_stdio(self, ClientSession: Any) -> None:
+        try:
+            from mcp.client.stdio import stdio_client, StdioServerParameters
+        except ImportError:
+            from mcp.client.stdio import stdio_client  # type: ignore[no-redef]
+            from mcp import StdioServerParameters  # type: ignore[no-redef]
+
+        env = self._config.get("env") or None
+        params = StdioServerParameters(
+            command=self._config["command"],
+            args=self._config.get("args", []),
+            env=env,
+        )
+        async with stdio_client(params) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                self._session = session
+                self._ready.set()
+                log.info("MCP server '%s' ready (stdio)", self.name)
+                await self._shutdown.wait()
+
+    async def _run_http(self, ClientSession: Any) -> None:
+        from mcp.client.streamable_http import streamable_http_client
+
+        url = self._config["url"]
+        headers = self._config.get("headers") or {}
+        async with streamable_http_client(url, headers=headers) as (read, write):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                self._session = session
+                self._ready.set()
+                log.info("MCP server '%s' ready (http)", self.name)
+                await self._shutdown.wait()
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         if not self._session:

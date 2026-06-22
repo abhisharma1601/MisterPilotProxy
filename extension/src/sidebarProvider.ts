@@ -126,6 +126,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'openMcpSettings':
           await vscode.commands.executeCommand('misterpilot.openMcpSettings');
           break;
+        case 'getMcpConfig': {
+          const cfg = vscode.workspace
+            .getConfiguration('misterpilot')
+            .get<Record<string, unknown>>('mcpServers', {});
+          view.webview.postMessage({ type: 'mcpConfig', config: cfg });
+          break;
+        }
+        case 'saveMcpConfig':
+          await vscode.workspace
+            .getConfiguration('misterpilot')
+            .update('mcpServers', msg.config, vscode.ConfigurationTarget.Global);
+          void this._postMcpStatus(view.webview);
+          break;
       }
     });
   }
