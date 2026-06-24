@@ -5,6 +5,8 @@ import uvicorn
 
 ENV = "dev"  # change to "prod" for production
 
+import os
+os.environ["APP_ENV"] = ENV
 load_dotenv(Path(__file__).parent / "backend" / f".env.{ENV}")
 
 if __name__ == "__main__":
@@ -17,5 +19,5 @@ if __name__ == "__main__":
         "backend.main:app",
         host=config.server.host,
         port=config.server.port,
-        reload=(ENV == "dev"),
+        reload=(ENV == "prod"),
     )

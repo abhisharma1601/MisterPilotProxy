@@ -43,9 +43,11 @@ _secret_cache: dict[str, tuple[str, float]] = {}
 
 def _load_env(path: str | None = None) -> None:
     """Load variables from .env into the environment (no-op if already set)."""
-    env_path = path or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "..", ".env"
-    )
+    if path is None:
+        env = os.environ.get("APP_ENV", "dev").lower()
+        env_file = f".env.{env}"
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", env_file)
+    env_path = path
     if not os.path.exists(env_path):
         return
     with open(env_path, encoding="utf-8") as f:
