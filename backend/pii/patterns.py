@@ -128,6 +128,31 @@ PATTERN_REGISTRY: list[PatternDef] = [
         ),
         priority=89,
     ),
+    # Case-insensitive variant — catches lowered/mixed-case AWS keys
+    PatternDef(
+        EntityType.AWS_KEY,
+        re.compile(
+            r"\b(?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)[A-Z0-9]{16}\b",
+            re.IGNORECASE,
+        ),
+        priority=88,
+    ),
+    # Homoglyph-aware — catches AWS keys with Cyrillic lookalikes
+    # А(U+0410)=A, К(U+041A)=K, І(U+0406)=I, М(U+041C)=M, Н(U+041D)=H,
+    # О(U+041E)=O, Р(U+0420)=P, С(U+0421)=C, Т(U+0422)=T, У(U+0423)=Y,
+    # Е(U+0415)=E, Х(U+0425)=X, В(U+0412)=B
+    PatternDef(
+        EntityType.AWS_KEY,
+        re.compile(
+            r"\b(?:[AА]3T[A-Z0-9]|"
+            r"[AА][KК][IІ][AА]|[AА][GԌ][PР][AА]|[AА][IІ][Dԁ][AА]|"
+            r"[AА][R][OО][AА]|[AА][IІ][PР][AА]|[AА][NΝ][PР][AА]|"
+            r"[AА][NΝ][V][AА]|[AА][SЅ][IІ][AА])"
+            r"[A-ZА-Я0-9]{16}\b",
+            re.IGNORECASE,
+        ),
+        priority=87,
+    ),
 
     # ── Stripe keys ────────────────────────────────────────────────────────────
     # Secret (sk_), publishable (pk_), restricted (rk_); live + test; webhook secret
@@ -271,10 +296,10 @@ PATTERN_REGISTRY: list[PatternDef] = [
         re.compile(r"\bshp(?:at|ss|ca|pa|uat)_[0-9A-Fa-f]{32,}\b"),
         priority=76,
     ),
-    # Telegram bot token: <8-10 digits>:<35 alnum+_->
+    # Telegram bot token: <8-10 digits>:<32+ alnum+_->
     PatternDef(
         EntityType.SERVICE_TOKEN,
-        re.compile(r"\b[0-9]{8,10}:[A-Za-z0-9_\-]{35}\b"),
+        re.compile(r"\b[0-9]{8,10}:[A-Za-z0-9_\-]{32,}\b"),
         priority=76,
     ),
     # Discord bot token: <18-26 base64url>.<6 chars>.<27-40 chars>
@@ -283,10 +308,10 @@ PATTERN_REGISTRY: list[PatternDef] = [
         re.compile(r"\b[A-Za-z0-9_\-]{18,26}\.[A-Za-z0-9_\-]{6}\.[A-Za-z0-9_\-]{27,40}\b"),
         priority=76,
     ),
-    # Docker Hub personal access token: dckr_pat_<43>
+    # Docker Hub personal access token: dckr_pat_<36+>
     PatternDef(
         EntityType.SERVICE_TOKEN,
-        re.compile(r"\bdckr_pat_[A-Za-z0-9_\-]{43,}\b"),
+        re.compile(r"\bdckr_pat_[A-Za-z0-9_\-]{36,}\b"),
         priority=76,
     ),
     # DigitalOcean personal access token: dop_v1_<64 hex>

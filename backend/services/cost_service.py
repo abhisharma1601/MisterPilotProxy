@@ -1,32 +1,71 @@
+import asyncio
 import logging
 import os
 from typing import Dict, Optional
 
 import httpx
 
-from .key_service import _load_env
+from .key_service import is_misterpilot_key, _load_env
 
 log = logging.getLogger(__name__)
 
+INR_RATE = 96.0
+MARGIN = 1.30
 
-def _usage_url() -> str:
+_PRICING = {
+    "deepseek-v4-pro": {
+        "output":    0.00000087,
+        "cache_hit": 0.000000003625,
+        "cache_miss": 0.000000435,
+    },
+    "deepseek-v4-flash": {
+        "output":    0.00000028,
+        "cache_hit": 0.0000000028,
+        "cache_miss": 0.00000014,
+    },
+}
+_FALLBACK = "deepseek-v4-pro"
+
+
+def _get_rates(model: Optional[str]) -> Dict[str, float]:
+    return _PRICING.get(model or "", _PRICING[_FALLBACK])
+
+
+def _charge_url() -> str:
     _load_env()
     url = os.environ.get("USAGE_CHARGE_URL")
     if not url:
         raise RuntimeError("USAGE_CHARGE_URL is not set in .env")
     return url
-    
+
+
+async def _fire_charge(
+    api_key: str,
+    model: str,
+    cost_inr: float,
+    output: int,
+    cache_hit: int,
+    cache_miss: int,
+) -> None:
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(
+                _charge_url(),
+                json={
+                    "apiKey": api_key,
+                    "model": model,
+                    "costInr": cost_inr,
+                    "outputTokens": output,
+                    "cacheHitTokens": cache_hit,
+                    "cacheMissTokens": cache_miss,
+                },
+                timeout=10.0,
+            )
+    except Exception as exc:
+        log.warning("Usage charge failed (non-blocking): %s", exc)
 
 
 class CostService:
-    """Delegates cost calculation to the external usage API.
-
-    Two endpoints are used, transparently chosen by key type:
-
-    * ``/api/usage/charge``  — MisterPilot keys (wallet + balance).
-    * ``/api/usage/calculate`` — user-supplied DeepSeek keys (cost-only).
-    """
-
     async def calc_cost(
         self,
         *,
@@ -36,30 +75,31 @@ class CostService:
         cache_miss: int,
         api_key: str,
     ) -> Dict:
-        """Call the usage API and return the full response dict.
+        rates = _get_rates(model)
+        raw_usd = (
+            output     * rates["output"]
+            + cache_hit  * rates["cache_hit"]
+            + cache_miss * rates["cache_miss"]
+        )
+        final_usd = raw_usd * MARGIN if is_misterpilot_key(api_key) else raw_usd
+        cost_inr = final_usd * INR_RATE
+        resolved_model = model or _FALLBACK
 
-        The external API is expected to return at least::
+        if is_misterpilot_key(api_key):
+            asyncio.create_task(_fire_charge(
+                api_key=api_key,
+                model=resolved_model,
+                cost_inr=cost_inr,
+                output=output,
+                cache_hit=cache_hit,
+                cache_miss=cache_miss,
+            ))
 
-            {"costUsd": float, "costInr": float, ...}
-
-        Any extra fields (balanceAfter, breakdown, transactionId, …) are
-        forwarded unchanged to the extension so the UI can expose them.
-        """
-        url = _usage_url()
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                url,
-                json={
-                    "apiKey": api_key,
-                    "outputTokens": output,
-                    "cacheHitTokens": cache_hit,
-                    "cacheMissTokens": cache_miss,
-                    "model": model,
-                },
-                timeout=10.0,
-            )
-            resp.raise_for_status()
-            return resp.json()
+        return {
+            "costUsd": final_usd,
+            "costInr": cost_inr,
+            "model": resolved_model,
+        }
 
 
 _service: Optional[CostService] = None

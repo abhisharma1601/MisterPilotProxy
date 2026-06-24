@@ -34,6 +34,8 @@ class DeepSeekClient:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> AsyncIterator[Dict[str, Any]]:
         """Stream a chat completion yielding raw OpenAI chunk dicts.
 
@@ -44,7 +46,7 @@ class DeepSeekClient:
 
         for attempt in range(max(1, self._cfg.max_retries)):
             try:
-                stream = await self._client.chat.completions.create(
+                params: Dict[str, Any] = dict(
                     model=model or self._cfg.model,
                     messages=messages,
                     stream=True,
@@ -52,6 +54,11 @@ class DeepSeekClient:
                     max_tokens=max_tokens,
                     stream_options={"include_usage": True},
                 )
+                if tools:
+                    params["tools"] = tools
+                if tool_choice is not None:
+                    params["tool_choice"] = tool_choice
+                stream = await self._client.chat.completions.create(**params)
                 async for chunk in stream:
                     yield chunk.model_dump(exclude_none=True)
                 return
@@ -239,19 +246,26 @@ class DeepSeekClient:
         model: Optional[str] = None,
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Any] = None,
     ) -> Any:
         """Non-streaming completion, returns the raw OpenAI ChatCompletion object."""
         last_exc: Optional[Exception] = None
 
         for attempt in range(max(1, self._cfg.max_retries)):
             try:
-                return await self._client.chat.completions.create(
+                params: Dict[str, Any] = dict(
                     model=model or self._cfg.model,
                     messages=messages,
                     stream=False,
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                if tools:
+                    params["tools"] = tools
+                if tool_choice is not None:
+                    params["tool_choice"] = tool_choice
+                return await self._client.chat.completions.create(**params)
             except (AuthenticationError, PermissionDeniedError) as exc:
                 raise self._safe_error(exc)
             except (APIConnectionError, APITimeoutError) as exc:

@@ -24,6 +24,10 @@ from .store import MappingStore
 _PLACEHOLDER_RE = re.compile(
     r"\b(?:" + "|".join(re.escape(e.value) for e in EntityType) + r")_[0-9A-F]{4,}(?:_\d+)?\b"
 )
+# Boundary-free version for substring checks
+_PLACEHOLDER_SUBSTRING_RE = re.compile(
+    r"(?:" + "|".join(re.escape(e.value) for e in EntityType) + r")_[0-9A-F]{4,}(?:_\d+)?"
+)
 
 
 class Pseudonymizer:
@@ -58,6 +62,14 @@ class Pseudonymizer:
             return original if original is not None else m.group(0)
 
         return _PLACEHOLDER_RE.sub(_replace, text)
+
+    def is_placeholder(self, text: str) -> bool:
+        """Return True if *text* looks like a generated placeholder."""
+        return bool(_PLACEHOLDER_RE.fullmatch(text))
+
+    def contains_placeholder(self, text: str) -> bool:
+        """Return True if *text* contains a generated placeholder substring."""
+        return bool(_PLACEHOLDER_SUBSTRING_RE.search(text))
 
     def _normalize_for_hmac(self, entity_type: EntityType, value: str) -> str:
         # Entity linking for emails: normalise to local part so that

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+import re
 from typing import Any
 
 from .config import PseudonymConfig
@@ -68,8 +69,129 @@ class RedactionPipeline:
             resolved = self._resolve_overlaps(raw)
             sanitized, findings = self._apply(text, resolved)
 
+        # Second pass: deobfuscated scan to catch encoding / whitespace /
+        # comment / homoglyph bypasses that the normal pass missed.
+        sanitized, extra = self._deobfuscated_redact(
+            sanitized, {f.original for f in findings}
+        )
+        findings.extend(extra)
+
         self._metrics.record_redaction(len(findings))
         return sanitized, findings
+
+    # ── deobfuscation pass ────────────────────────────────────────────────
+
+    _HOMOGLYPH_MAP: dict[int, int] = {
+        0x0410: 0x41, 0x0412: 0x42, 0x0415: 0x45, 0x041A: 0x4B,
+        0x041C: 0x4D, 0x041D: 0x48, 0x041E: 0x4F, 0x0420: 0x50,
+        0x0421: 0x43, 0x0422: 0x54, 0x0423: 0x59, 0x0425: 0x58,
+        0x0406: 0x49, 0x0408: 0x4A, 0x0405: 0x53, 0x0404: 0x45,
+        0xA0:    0x20,  # non-breaking space
+    }
+
+    @classmethod
+    def _normalize_homoglyphs(cls, text: str) -> str:
+        """Map Cyrillic/Unicode lookalikes to their ASCII equivalents."""
+        return text.translate(cls._HOMOGLYPH_MAP)
+
+    @classmethod
+    def _deobfuscate(cls, text: str) -> str:
+        """Normalise text to defeat common obfuscation tricks.
+
+        Handles: HTML entities, URL encoding, C-style comments, whitespace
+        runs, emoji / non-ASCII splitters, dash/dot separators, and Cyrillic
+        homoglyphs.  Strips ALL non-alphanumeric-noise so split-secret
+        bypasses are caught on re-scan.  The output is only used for pattern
+        matching — the original text is preserved for display.
+        """
+        import html as _html
+        from urllib.parse import unquote
+
+        text = _html.unescape(unquote(text))
+        text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+        text = cls._normalize_homoglyphs(text)
+        # Remove whitespace, emoji, dashes, dots — everything that could be
+        # used to split a secret token without changing meaning.
+        # Underscores are NOT stripped: they appear in real tokens.
+        return re.sub(r"[\s\-.\u00a0\U0001F300-\U0001FFFF\u2600-\u27FF\u2000-\u206F]+",
+                      "", text)
+
+    @classmethod
+    def _build_flexible_pattern(cls, core: str) -> str:
+        """Build a regex that matches `core` allowing HTML entities, URL
+        encoding, whitespace, dashes, dots, underscores, C-style comments,
+        and emoji between each character — the most common obfuscation tricks."""
+        _SEP = (
+            r"(?:/\*.*?\*/)?"   # C-style /* comment */ between chars
+            r"[\s\-.\u00a0\U0001F300-\U0001FFFF\u2600-\u27FF\u2000-\u206F]*"
+        )
+        parts: list[str] = []
+        for ch in core:
+            if ch.isascii() and (ch.isalnum() or ch in "-_"):
+                code = ord(ch)
+                parts.append(
+                    r"(?:" + re.escape(ch)
+                    + r"|&#" + str(code) + r";"
+                    + r"|&#[Xx]" + format(code, "X") + r";"
+                    + r"|%" + format(code, "02X") + r")"
+                    + _SEP
+                )
+            else:
+                parts.append(re.escape(ch) + _SEP)
+        return "".join(parts)
+
+    def _deobfuscated_redact(
+        self, text: str, already: set[str]
+    ) -> tuple[str, list[Finding]]:
+        """Second-pass scan against deobfuscated text.
+
+        Returns (sanitized_text, extra_findings).  Deobfuscates the input,
+        scans for patterns in the clean (whitespace-free, HTML-unescaped,
+        etc.) text, then maps findings back into the real text via flexible
+        regex substitution that accounts for the original obfuscation.
+        """
+        cleaned = self._deobfuscate(text)
+        if cleaned == text:
+            return text, []
+
+        extra: list[Finding] = []
+        for pdef in PATTERN_REGISTRY:
+            for m in pdef.pattern.finditer(cleaned):
+                vg = pdef.value_group
+                sensitive = m.group(vg)
+                if not sensitive or is_excluded(sensitive):
+                    continue
+                core = re.sub(r"\s+", "", sensitive)
+                if core in already or len(core) < 8:
+                    continue
+                # Skip pseudonymizer placeholders — they look like
+                # ENTITY_TYPE_HEX and could be found by the patterns after
+                # whitespace removal concatenates them with adjacent text.
+                if self._pseudo.contains_placeholder(core):
+                    continue
+                # Verify core exists in the *deobfuscated* original
+                if core not in cleaned:
+                    continue
+
+                already.add(core)
+                placeholder = self._pseudo.pseudonymize(pdef.entity_type, core)
+
+                # Replace in the real text using a flexible pattern that
+                # accounts for HTML entities, URL encoding, C comments,
+                # whitespace, dashes, dots, and emoji between every character.
+                pattern = self._build_flexible_pattern(core)
+                text, n = re.subn(
+                    pattern, placeholder, text, count=1, flags=re.DOTALL,
+                )
+                if n:
+                    extra.append(Finding(
+                        entity_type=pdef.entity_type.value,
+                        original=core[:80] + ("..." if len(core) > 80 else ""),
+                        placeholder=placeholder,
+                        context="[deobfuscated]",
+                    ))
+
+        return text, extra
 
     def restore(self, text: str) -> str:
         """Replace all known placeholders in text with their original values."""

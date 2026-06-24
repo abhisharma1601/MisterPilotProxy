@@ -44,3 +44,6 @@ Thumbs.db
 
 # Claude
 .claude/
+
+# Scratch docs
+cost-calculation.md

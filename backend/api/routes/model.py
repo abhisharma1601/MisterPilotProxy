@@ -37,7 +37,12 @@ router = APIRouter()
 
 class Message(BaseModel):
     role: str
-    content: str
+    content: Optional[str] = None
+    tool_calls: Optional[List[Dict[str, Any]]] = None
+    tool_call_id: Optional[str] = None
+    name: Optional[str] = None
+
+    model_config = {"extra": "allow"}
 
 
 class ChatCompletionRequest(BaseModel):
@@ -47,6 +52,8 @@ class ChatCompletionRequest(BaseModel):
     temperature: float = 0.7
     max_tokens: int = 8192
     apikey: Optional[str] = None
+    tools: Optional[List[Dict[str, Any]]] = None
+    tool_choice: Optional[Any] = None
 
 
 # ── helpers ───────────────────────────────────────────────────────────
@@ -78,7 +85,6 @@ async def _calc_cost_usage(
     cache_miss: int,
     api_key: str,
 ) -> dict:
-    """Await cost calculation, routing to charge vs. calculate endpoint by key type."""
     return await cost_service.calc_cost(
         model=model,
         output=completion_tokens,
@@ -96,7 +102,7 @@ def _sanitize_messages(
     total_findings = 0
 
     for m in messages:
-        msg: Dict[str, Any] = {"role": m.role, "content": m.content}
+        msg: Dict[str, Any] = m.model_dump(exclude_none=True)
         if msg.get("role") == "user" and isinstance(msg.get("content"), str):
             sanitized, findings = pipeline.redact(msg["content"])
             if findings:
@@ -144,6 +150,8 @@ async def model_chat(
                 model=body.model,
                 temperature=body.temperature,
                 max_tokens=body.max_tokens,
+                tools=body.tools or None,
+                tool_choice=body.tool_choice,
             )
         except LLMAuthError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
@@ -176,7 +184,7 @@ async def model_chat(
             cache_hit,
             cache_miss,
             cost_usd,
-            client_key_type,
+            key_type(api_key),
         )
         return JSONResponse(content=result)
 
@@ -195,6 +203,8 @@ async def _stream_chunks(
             model=body.model,
             temperature=body.temperature,
             max_tokens=body.max_tokens,
+            tools=body.tools or None,
+            tool_choice=body.tool_choice,
         ):
             # Capture usage from the final chunk (DeepSeek sends it with
             # stream_options={"include_usage": True}) and log the cost.
