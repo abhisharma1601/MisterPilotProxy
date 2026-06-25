@@ -6,17 +6,12 @@ load_dotenv(Path(__file__).parent / ".env")
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
 
 from . import __version__
 from .config import get_config
 from .logging_config import setup_logging
 from .api.routes import terminal, agent, model
 from .api.routes.model import ChatCompletionRequest, model_chat
-
-_LANDING = (Path(__file__).parent / "static" / "index.html").read_text()
-_PLAYGROUND = (Path(__file__).parent / "static" / "playground.html").read_text()
 
 
 @asynccontextmanager
@@ -47,16 +42,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    app.mount("/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-
-    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
-    async def landing():
-        return _LANDING
-
-    @app.get("/playground", response_class=HTMLResponse, include_in_schema=False)
-    async def playground():
-        return _PLAYGROUND
 
     app.include_router(terminal.router, prefix="/terminal", tags=["terminal"])
     app.include_router(agent.router, prefix="/agent", tags=["agent"])
