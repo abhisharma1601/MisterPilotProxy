@@ -1,11 +1,10 @@
 """Entry point — run directly after activating the venv: python run.py"""
+import os
 from pathlib import Path
 from dotenv import load_dotenv
 import uvicorn
 
-ENV = "dev"  # change to "prod" for production
-
-import os
+ENV = os.environ.get("APP_ENV", "dev")
 os.environ["APP_ENV"] = ENV
 load_dotenv(Path(__file__).parent / "backend" / f".env.{ENV}")
 
@@ -19,5 +18,5 @@ if __name__ == "__main__":
         "backend.main:app",
         host=config.server.host,
         port=config.server.port,
-        reload=(ENV == "prod"),
+        reload=(ENV == "dev"),
     )

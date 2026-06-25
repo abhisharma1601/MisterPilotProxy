@@ -16,6 +16,7 @@ it through :func:`resolve_api_key` first, e.g.::
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from typing import Optional
@@ -24,6 +25,8 @@ import boto3
 import requests
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
+
+logger = logging.getLogger(__name__)
 
 # MisterPilot-issued keys look like "mp-34982349343".
 MISTERPILOT_KEY_PREFIX = "mp"
@@ -49,6 +52,7 @@ def _load_env(path: str | None = None) -> None:
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", env_file)
     env_path = path
     if not os.path.exists(env_path):
+        logger.debug("No .env file found at %s, skipping", env_path)
         return
     with open(env_path, encoding="utf-8") as f:
         for line in f:
@@ -60,6 +64,7 @@ def _load_env(path: str | None = None) -> None:
             value = value.strip().strip('"').strip("'")
             if value and key not in os.environ:
                 os.environ[key] = value
+    logger.info("Loaded environment from %s", env_path)
 
 
 def is_misterpilot_key(key: Optional[str]) -> bool:
@@ -76,7 +81,9 @@ def _aws_secret_name() -> str:
     """Return the Secrets Manager secret name based on APP_ENV (dev or prod)."""
     _load_env()
     env = os.environ.get("APP_ENV", "dev").lower()
-    return "deepseek_prod" if env == "prod" else "deepseek_dev"
+    name = "deepseek_prod" if env == "prod" else "deepseek_dev"
+    logger.debug("Resolved AWS secret name: %s (APP_ENV=%s)", name, env)
+    return name
 
 
 def _fetch_deepseek_key_from_aws(secret_name: str) -> str:
@@ -84,19 +91,23 @@ def _fetch_deepseek_key_from_aws(secret_name: str) -> str:
     now = time.monotonic()
     cached = _secret_cache.get(secret_name)
     if cached and now < cached[1]:
+        logger.debug("Using cached DeepSeek key from secret %s", secret_name)
         return cached[0]
 
+    logger.info("Fetching DeepSeek key from AWS Secrets Manager: %s", secret_name)
     try:
         client = boto3.client("secretsmanager")
         response = client.get_secret_value(SecretId=secret_name)
         secret = json.loads(response["SecretString"])
         api_key: str = secret[_AWS_SECRET_KEY_FIELD]
     except (ClientError, KeyError, json.JSONDecodeError) as exc:
+        logger.exception("Failed to fetch DeepSeek key from AWS Secrets Manager (%s)", secret_name)
         raise RuntimeError(
             f"Failed to fetch DeepSeek key from AWS Secrets Manager ({secret_name!r}): {exc}"
         ) from exc
 
     _secret_cache[secret_name] = (api_key, now + _SECRET_TTL_SECONDS)
+    logger.info("Successfully fetched and cached DeepSeek key from %s", secret_name)
     return api_key
 
 
@@ -108,21 +119,37 @@ def _verify_url() -> str:
     _load_env()
     url = os.environ.get("MISTERPILOT_VERIFY_URL")
     if not url:
+        logger.error("MISTERPILOT_VERIFY_URL is not set in .env")
         raise RuntimeError("MISTERPILOT_VERIFY_URL is not set in .env")
     return url
 
 def verify_misterpilot_key(key: Optional[str]) -> bool:
     try:
-        response = requests.post(_verify_url(), json={"apiKey": key}, timeout=5)
+        url = _verify_url()
+    except RuntimeError as exc:
+        logger.error("Server misconfiguration: %s", exc)
+        raise HTTPException(status_code=500, detail="Server misconfiguration: key verification URL not configured")
+
+    try:
+        response = requests.post(url, json={"apiKey": key}, timeout=5)
         response.raise_for_status()
         return bool(response.json().get("valid", False))
     except requests.exceptions.ConnectionError:
+        logger.error("Key verification service is unreachable")
         raise HTTPException(status_code=503, detail="Key verification service is unreachable")
     except requests.exceptions.Timeout:
+        logger.error("Key verification service timed out")
         raise HTTPException(status_code=503, detail="Key verification service timed out")
-    except requests.exceptions.HTTPError:
+    except requests.exceptions.HTTPError as e:
+        # 5xx: the verification service itself is broken — propagate as 503
+        if e.response is not None and e.response.status_code >= 500:
+            logger.error("Key verification service returned %s", e.response.status_code)
+            raise HTTPException(status_code=503, detail="Key verification service error")
+        # 4xx: the key is genuinely invalid (401, 400, etc.)
+        logger.warning("Key verification rejected (HTTP %s)", e.response.status_code if e.response else "?")
         return False
     except Exception:
+        logger.exception("Unexpected error during key verification")
         raise HTTPException(status_code=503, detail="Key verification service error")
 
 
