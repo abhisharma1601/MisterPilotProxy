@@ -44,26 +44,14 @@ _SECRET_TTL_SECONDS = 300  # refresh cached secret every 5 minutes
 _secret_cache: dict[str, tuple[str, float]] = {}
 
 
-def _load_env(path: str | None = None) -> None:
-    """Load variables from .env into the environment (no-op if already set)."""
-    if path is None:
-        env = os.environ.get("APP_ENV", "dev").lower()
-        env_file = f".env.{env}"
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", env_file)
-    env_path = path
+def _load_env() -> None:
+    """Load variables from backend/.env into the environment (no-op if already set)."""
+    from dotenv import load_dotenv
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".env")
     if not os.path.exists(env_path):
         logger.debug("No .env file found at %s, skipping", env_path)
         return
-    with open(env_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip('"').strip("'")
-            if value and key not in os.environ:
-                os.environ[key] = value
+    load_dotenv(env_path, override=False)
     logger.info("Loaded environment from %s", env_path)
 
 

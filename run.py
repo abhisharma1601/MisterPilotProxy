@@ -4,9 +4,8 @@ from pathlib import Path
 from dotenv import load_dotenv
 import uvicorn
 
+load_dotenv(Path(__file__).parent / "backend" / ".env")
 ENV = os.environ.get("APP_ENV", "dev")
-os.environ["APP_ENV"] = ENV
-load_dotenv(Path(__file__).parent / "backend" / f".env.{ENV}")
 
 if __name__ == "__main__":
     from backend.config import get_config
