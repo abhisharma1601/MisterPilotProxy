@@ -11,7 +11,7 @@ The extension may send one of two kinds of keys in the request:
 Routes must never hand a raw header key to the LLM client directly. They resolve
 it through :func:`resolve_api_key` first, e.g.::
 
-    client = get_deepseek_client(resolve_api_key(x_api_key))
+    client = get_deepseek_client(await resolve_api_key(x_api_key))
 """
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ import time
 from typing import Optional
 
 import boto3
-import requests
+import httpx
 from botocore.exceptions import ClientError
 from fastapi import HTTPException
 
@@ -111,7 +111,7 @@ def _verify_url() -> str:
         raise RuntimeError("MISTERPILOT_VERIFY_URL is not set in .env")
     return url
 
-def verify_misterpilot_key(key: Optional[str]) -> bool:
+async def verify_misterpilot_key(key: Optional[str]) -> bool:
     try:
         url = _verify_url()
     except RuntimeError as exc:
@@ -119,36 +119,35 @@ def verify_misterpilot_key(key: Optional[str]) -> bool:
         raise HTTPException(status_code=500, detail="Server misconfiguration: key verification URL not configured")
 
     try:
-        response = requests.post(url, json={"apiKey": key}, timeout=5)
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json={"apiKey": key}, timeout=5.0)
         response.raise_for_status()
         return bool(response.json().get("valid", False))
-    except requests.exceptions.ConnectionError:
+    except httpx.ConnectError:
         logger.error("Key verification service is unreachable")
         raise HTTPException(status_code=503, detail="Key verification service is unreachable")
-    except requests.exceptions.Timeout:
+    except httpx.TimeoutException:
         logger.error("Key verification service timed out")
         raise HTTPException(status_code=503, detail="Key verification service timed out")
-    except requests.exceptions.HTTPError as e:
-        # 5xx: the verification service itself is broken — propagate as 503
-        if e.response is not None and e.response.status_code >= 500:
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code >= 500:
             logger.error("Key verification service returned %s", e.response.status_code)
             raise HTTPException(status_code=503, detail="Key verification service error")
-        # 4xx: the key is genuinely invalid (401, 400, etc.)
-        logger.warning("Key verification rejected (HTTP %s)", e.response.status_code if e.response else "?")
+        logger.warning("Key verification rejected (HTTP %s)", e.response.status_code)
         return False
     except Exception:
         logger.exception("Unexpected error during key verification")
         raise HTTPException(status_code=503, detail="Key verification service error")
 
 
-def resolve_api_key(key: Optional[str]) -> str:
+async def resolve_api_key(key: Optional[str]) -> str:
     """Resolve an inbound header key to an actual DeepSeek key.
 
     - MisterPilot key (``mp-…``) → our DeepSeek key from the environment.
     - Anything else → used as-is (assumed to already be a real DeepSeek key).
     """
     if is_misterpilot_key(key):
-        if(not verify_misterpilot_key(key)):
+        if not await verify_misterpilot_key(key):
             raise HTTPException(status_code=401, detail="Invalid or Low Balance in MisterPilot API key")
         return _get_deepseek_key()
     return key or ""

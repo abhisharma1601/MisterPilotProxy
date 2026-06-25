@@ -60,8 +60,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         this._postWorkspaceRoot(view.webview);
         void this._postApiKeyStatus(view.webview);
         void this._postModels(view.webview);
+        void this._postMcpStatus(view.webview);
       }
     });
+
+    this._context.subscriptions.push(
+      vscode.workspace.onDidChangeConfiguration((e) => {
+        if (e.affectsConfiguration('misterpilot.mcpServers') && view.visible) {
+          void this._postMcpStatus(view.webview);
+        }
+      })
+    );
 
     view.webview.onDidReceiveMessage(async (msg: WebviewMessage) => {
       switch (msg.type) {
@@ -71,6 +80,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           await this._postApiKeyStatus(view.webview);
           await this._restoreChats(view.webview);
           await this._postModels(view.webview);
+          void this._postMcpStatus(view.webview);
           break;
         case 'chat':
           await this._handleChat(msg.messages, view.webview, msg.model, msg.mode);
@@ -112,6 +122,22 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         case 'renameChat':
           await this._chatStore.renameChat(msg.chatId, msg.title);
           await this._postChatList(view.webview);
+          break;
+        case 'openMcpSettings':
+          await vscode.commands.executeCommand('misterpilot.openMcpSettings');
+          break;
+        case 'getMcpConfig': {
+          const cfg = vscode.workspace
+            .getConfiguration('misterpilot')
+            .get<Record<string, unknown>>('mcpServers', {});
+          view.webview.postMessage({ type: 'mcpConfig', config: cfg });
+          break;
+        }
+        case 'saveMcpConfig':
+          await vscode.workspace
+            .getConfiguration('misterpilot')
+            .update('mcpServers', msg.config, vscode.ConfigurationTarget.Global);
+          void this._postMcpStatus(view.webview);
           break;
       }
     });
@@ -188,6 +214,33 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     webview.postMessage({ type: 'apiKeyStatus', isSet: !!key });
   }
 
+  private async _postMcpStatus(webview: vscode.Webview): Promise<void> {
+    const cfg = vscode.workspace
+      .getConfiguration('misterpilot')
+      .get<Record<string, unknown>>('mcpServers', {});
+    const names = Object.keys(cfg);
+    if (names.length === 0) return;
+
+    // Send immediately with unknown status so dropdown appears right away
+    webview.postMessage({
+      type: 'mcpStatus',
+      servers: names.map((name) => ({ name, connected: null })),
+    });
+
+    // Probe backend for real connection status
+    try {
+      const res = await fetch(`${BACKEND_URL}/agent/mcp-status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mcp_servers: cfg }),
+      });
+      if (res.ok) {
+        const data = await res.json() as { servers: { name: string; connected: boolean; toolCount?: number }[] };
+        webview.postMessage({ type: 'mcpStatus', servers: data.servers });
+      }
+    } catch { /* backend unreachable — keep the unknown-status dots */ }
+  }
+
   private async _postModels(webview: vscode.Webview): Promise<void> {
     try {
       const res = await fetch(`${BACKEND_URL}/agent/models`);
@@ -228,8 +281,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? null;
     const apiKey = await this._context.secrets.get('misterpilot.apiKey') ?? '';
 
+    const mcpServers = vscode.workspace
+      .getConfiguration('misterpilot')
+      .get<Record<string, unknown>>('mcpServers', {});
+
     const body: Record<string, unknown> = { messages, model, mode };
     if (workspaceRoot) body.workspace_root = workspaceRoot;
+    if (mcpServers && Object.keys(mcpServers).length > 0) body.mcp_servers = mcpServers;
 
     this._abortController = new AbortController();
 

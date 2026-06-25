@@ -34,6 +34,7 @@ class AgentRequest(BaseModel):
     workspace_root: Optional[str] = None
     model: Optional[str] = None
     mode: str = "agent"  # "agent" | "ask"
+    mcp_servers: Optional[Dict[str, Any]] = None
 
 
 @router.get("/models")
@@ -80,7 +81,7 @@ async def agent_stream(
 
     # Resolve the inbound header key: a MisterPilot key (mp_…) is swapped for our
     # own DeepSeek key from .env; a real DeepSeek key is passed through unchanged.
-    llm_key = resolve_api_key(x_api_key)
+    llm_key = await resolve_api_key(x_api_key)
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
     # Accumulated token counts across all LLM turns — billed once at end.
@@ -94,7 +95,9 @@ async def agent_stream(
             yield {"data": json.dumps({"type": "sanitized_input", "content": last_user_sanitized})}
         try:
             async for event in react_agent.run(
-                messages, request.workspace_root, api_key=llm_key, model=model, mode=mode
+                messages, request.workspace_root,
+                api_key=llm_key, model=model, mode=mode,
+                mcp_servers=request.mcp_servers,
             ):
                 if event.get("type") == "usage":
                     # Accumulate — do NOT call cost service yet
@@ -150,6 +153,28 @@ async def agent_stream(
             )
 
     return EventSourceResponse(generate())
+
+
+class McpStatusRequest(BaseModel):
+    mcp_servers: Optional[Dict[str, Any]] = None
+
+
+@router.post("/mcp-status")
+async def mcp_status(request: McpStatusRequest):
+    """Probe configured MCP servers and return connection status."""
+    if not request.mcp_servers:
+        return {"servers": []}
+    try:
+        from ...mcp.client import get_mcp_manager
+        manager = get_mcp_manager()
+        servers = await manager.get_status(request.mcp_servers)
+        return {"servers": servers}
+    except Exception as exc:
+        log.error("mcp-status error: %s", exc)
+        return {"servers": [
+            {"name": n, "connected": False, "error": str(exc)}
+            for n in request.mcp_servers.keys()
+        ]}
 
 
 class ToolResultRequest(BaseModel):

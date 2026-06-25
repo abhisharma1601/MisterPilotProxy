@@ -2,7 +2,7 @@
   "name": "misterpilot",
   "displayName": "MisterPilot",
   "description": "AI coding assistant powered by DeepSeek",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "publisher": "misterpilot",
   "engines": {
     "vscode": "^1.85.0"
@@ -37,8 +37,51 @@
       {
         "command": "misterpilot.setApiKey",
         "title": "MisterPilot: Set API Key"
+      },
+      {
+        "command": "misterpilot.setBackendUrl",
+        "title": "MisterPilot: Set Backend URL"
+      },
+      {
+        "command": "misterpilot.openMcpSettings",
+        "title": "MisterPilot: Configure MCP Servers"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "MisterPilot",
+      "properties": {
+        "misterpilot.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8000",
+          "description": "URL of the MisterPilot backend server."
+        },
+        "misterpilot.mcpServers": {
+          "type": "object",
+          "default": {},
+          "description": "MCP server configurations (same format as Claude Desktop). Each key is a server name; the value specifies command, args, and env.",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "command": {
+                "type": "string",
+                "description": "Executable to run (e.g. 'npx', 'python')."
+              },
+              "args": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "Arguments passed to the command."
+              },
+              "env": {
+                "type": "object",
+                "description": "Environment variables for the MCP server process.",
+                "additionalProperties": { "type": "string" }
+              }
+            },
+            "required": ["command"]
+          }
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run build:all",

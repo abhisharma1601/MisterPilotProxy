@@ -27,7 +27,10 @@ export type WebviewMessage =
   | { type: 'loadChat'; chatId: string }
   | { type: 'listChats' }
   | { type: 'deleteChat'; chatId: string }
-  | { type: 'renameChat'; chatId: string; title: string };
+  | { type: 'renameChat'; chatId: string; title: string }
+  | { type: 'openMcpSettings' }
+  | { type: 'getMcpConfig' }
+  | { type: 'saveMcpConfig'; config: Record<string, unknown> };
 
 export type ExtensionMessage =
   | { type: 'chunk'; content: string }
@@ -48,7 +51,9 @@ export type ExtensionMessage =
   | { type: 'chatList'; chats: ChatMetaDTO[]; activeChatId: string | null }
   | { type: 'chatLoaded'; chat: StoredChatDTO }
   | { type: 'chatCreated'; chatId: string }
-  | { type: 'models'; models: string[] };
+  | { type: 'models'; models: string[] }
+  // mcp
+  | { type: 'mcpStatus'; servers: { name: string }[] };
 
 export interface ChatMetaDTO {
   id: string;

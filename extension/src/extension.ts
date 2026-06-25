@@ -52,6 +52,15 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage(`MisterPilot: Backend URL set to ${url}`);
     })
   );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('misterpilot.openMcpSettings', async () => {
+      await vscode.commands.executeCommand(
+        'workbench.action.openSettings',
+        'misterpilot.mcpServers'
+      );
+    })
+  );
 }
 
 export function deactivate(): void {}

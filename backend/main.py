@@ -23,6 +23,11 @@ _PLAYGROUND = (Path(__file__).parent / "static" / "playground.html").read_text()
 async def lifespan(app: FastAPI):
     setup_logging()
     yield
+    try:
+        from .mcp.client import get_mcp_manager
+        get_mcp_manager().stop_all()
+    except Exception:
+        pass
 
 
 def create_app() -> FastAPI:
