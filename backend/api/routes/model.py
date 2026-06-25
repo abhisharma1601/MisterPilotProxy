@@ -58,7 +58,7 @@ class ChatCompletionRequest(BaseModel):
 
 # ── helpers ───────────────────────────────────────────────────────────
 
-def _resolve_key(
+async def _resolve_key(
     raw_request: Request, body: ChatCompletionRequest
 ) -> tuple[str, str]:
     """Return (raw_key, resolved_key).
@@ -74,7 +74,7 @@ def _resolve_key(
         raw_key = body.apikey
     else:
         raw_key = ""
-    return raw_key, resolve_api_key(raw_key)
+    return raw_key, await resolve_api_key(raw_key)
 
 
 async def _calc_cost_usage(
@@ -121,7 +121,7 @@ async def model_chat(
     body: ChatCompletionRequest,
     raw_request: Request,
 ):
-    api_key, resolved_key = _resolve_key(raw_request, body)
+    api_key, resolved_key = await _resolve_key(raw_request, body)
     if not resolved_key:
         raise HTTPException(
             status_code=401,

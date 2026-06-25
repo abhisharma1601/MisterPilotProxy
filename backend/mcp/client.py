@@ -157,16 +157,22 @@ class _ServerSession:
         )
 
 
+_LIST_TOOLS_TIMEOUT = 10.0   # seconds to wait for list_tools()
+_CALL_TOOL_TIMEOUT  = 30.0   # seconds to wait for a single tool execution
+
+
 class MCPClientManager:
     """
     Singleton that manages connections to all configured MCP servers.
 
     Connections are cached by (name, config) key so they survive across chat
     turns. A dead connection is evicted and transparently reconnected.
+    Tool lists are cached per-session so repeated requests are instant.
     """
 
     def __init__(self) -> None:
         self._sessions: Dict[str, _ServerSession] = {}
+        self._tool_cache: Dict[str, List[Dict[str, Any]]] = {}
         self._lock: asyncio.Lock = asyncio.Lock()
 
     def _key(self, name: str, config: Dict[str, Any]) -> str:
@@ -180,33 +186,51 @@ class MCPClientManager:
                 return sess
             if sess:
                 sess.stop()
+                self._tool_cache.pop(key, None)
                 del self._sessions[key]
             sess = _ServerSession(name, config)
             await sess.connect()
             self._sessions[key] = sess
             return sess
 
+    async def _fetch_server_tools(
+        self, name: str, config: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """Connect to one server and return its tool list (cached after first call)."""
+        if not isinstance(config, dict) or ("command" not in config and "url" not in config):
+            log.warning("MCP server '%s' missing 'command'/'url' — skipping", name)
+            return []
+        key = self._key(name, config)
+        # Return cached tools if the session is still alive
+        if key in self._tool_cache:
+            sess = self._sessions.get(key)
+            if sess and sess.is_alive:
+                return self._tool_cache[key]
+        try:
+            sess = await self._get_session(name, config)
+            tools = await asyncio.wait_for(sess.list_tools(), timeout=_LIST_TOOLS_TIMEOUT)
+            self._tool_cache[key] = tools
+            log.info("MCP '%s': %d tool(s) available", name, len(tools))
+            return tools
+        except asyncio.TimeoutError:
+            log.error("MCP server '%s' list_tools timed out after %.0fs", name, _LIST_TOOLS_TIMEOUT)
+            return []
+        except Exception as exc:
+            log.error("Could not load tools from MCP server '%s': %s", name, exc)
+            return []
+
     async def get_tools(self, servers: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
-        Connect to all servers and return their tools as a merged OpenAI
-        function-calling tool list. Servers that fail are skipped with a warning.
+        Connect to all servers IN PARALLEL and return their tools as a merged
+        OpenAI function-calling tool list. Servers that fail are skipped.
         """
         if not servers:
             return []
 
-        all_tools: List[Dict[str, Any]] = []
-        for name, config in servers.items():
-            if not isinstance(config, dict) or "command" not in config:
-                log.warning("MCP server '%s' missing 'command' — skipping", name)
-                continue
-            try:
-                sess = await self._get_session(name, config)
-                tools = await sess.list_tools()
-                all_tools.extend(tools)
-                log.info("MCP '%s': %d tool(s) available", name, len(tools))
-            except Exception as exc:
-                log.error("Could not load tools from MCP server '%s': %s", name, exc)
-        return all_tools
+        results = await asyncio.gather(
+            *[self._fetch_server_tools(name, config) for name, config in servers.items()]
+        )
+        return [tool for tools in results for tool in tools]
 
     async def call_tool(
         self, qualified_name: str, args: Dict[str, Any], servers: Dict[str, Any]
@@ -221,7 +245,12 @@ class MCPClientManager:
             return f"Error: MCP server '{server_name}' not found in config"
         try:
             sess = await self._get_session(server_name, config)
-            return await sess.call_tool(tool_name, args)
+            return await asyncio.wait_for(
+                sess.call_tool(tool_name, args), timeout=_CALL_TOOL_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            log.error("MCP tool '%s' timed out after %.0fs", qualified_name, _CALL_TOOL_TIMEOUT)
+            return f"Error: MCP tool '{qualified_name}' timed out after {_CALL_TOOL_TIMEOUT:.0f}s"
         except Exception as exc:
             log.error("MCP tool call '%s' failed: %s", qualified_name, exc)
             return f"Error from MCP tool '{qualified_name}': {exc}"
@@ -235,8 +264,10 @@ class MCPClientManager:
                 continue
             try:
                 sess = await self._get_session(name, config)
-                tools = await sess.list_tools()
+                tools = await asyncio.wait_for(sess.list_tools(), timeout=_LIST_TOOLS_TIMEOUT)
                 results.append({"name": name, "connected": True, "toolCount": len(tools)})
+            except asyncio.TimeoutError:
+                results.append({"name": name, "connected": False, "error": "list_tools timed out"})
             except Exception as exc:
                 results.append({"name": name, "connected": False, "error": str(exc)})
         return results

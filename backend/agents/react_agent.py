@@ -10,6 +10,7 @@ Each iteration:
   4. If finish_reason=stop → done
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
@@ -325,13 +326,20 @@ async def run(
 
     base_tools = AGENT_TOOLS if mode == "agent" else ASK_TOOLS
 
-    # Fetch MCP tools and merge them into the tool list
+    # Fetch MCP tools and merge them into the tool list.
+    # get_tools() connects to all servers in parallel and caches results —
+    # subsequent requests are instant. We cap the wait at 15s so a slow/dead
+    # MCP server never blocks the first response.
     mcp_tool_list: List[Dict[str, Any]] = []
     mcp_manager = None
     if mcp_servers and _MCP_AVAILABLE:
         mcp_manager = get_mcp_manager()
         try:
-            mcp_tool_list = await mcp_manager.get_tools(mcp_servers)
+            mcp_tool_list = await asyncio.wait_for(
+                mcp_manager.get_tools(mcp_servers), timeout=15.0
+            )
+        except asyncio.TimeoutError:
+            log.warning("MCP tool discovery timed out — continuing without MCP tools")
         except Exception as exc:
             log.error("Failed to load MCP tools: %s", exc)
 
@@ -412,8 +420,16 @@ async def run(
 
             tool_result_content = ""
             if mcp_manager and mcp_servers and mcp_manager.is_mcp_tool(tool_name):
-                # Execute MCP tools directly in the backend — no extension round-trip needed
-                tool_result_content = await mcp_manager.call_tool(tool_name, tool_args, mcp_servers)
+                # Execute MCP tools directly in the backend — no extension round-trip needed.
+                # call_tool() in client.py enforces a 30s inner timeout; the 35s outer
+                # guard here covers the reconnect path on a dead session.
+                try:
+                    tool_result_content = await asyncio.wait_for(
+                        mcp_manager.call_tool(tool_name, tool_args, mcp_servers),
+                        timeout=35.0,
+                    )
+                except asyncio.TimeoutError:
+                    tool_result_content = f"Error: MCP tool '{tool_name}' timed out"
             else:
                 async for event in _execute_tool(tool_name, tool_args, workspace_root, tc["id"]):
                     if event["type"] == "_result":

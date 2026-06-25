@@ -81,7 +81,7 @@ async def agent_stream(
 
     # Resolve the inbound header key: a MisterPilot key (mp_…) is swapped for our
     # own DeepSeek key from .env; a real DeepSeek key is passed through unchanged.
-    llm_key = resolve_api_key(x_api_key)
+    llm_key = await resolve_api_key(x_api_key)
     model = request.model if request.model in AVAILABLE_MODELS else None
     mode = request.mode if request.mode in ("agent", "ask") else "agent"
     # Accumulated token counts across all LLM turns — billed once at end.
