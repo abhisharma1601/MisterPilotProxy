@@ -1,4 +1,5 @@
 aiofiles==25.1.0
+mcp>=1.0.0
 annotated-doc==0.0.4
 boto3
 annotated-types==0.7.0

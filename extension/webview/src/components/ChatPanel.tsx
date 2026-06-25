@@ -2,8 +2,9 @@ import { useState, useCallback, useEffect, useRef } from 'react';
 import { MessageList } from './MessageList';
 import { InputBar } from './InputBar';
 import { ChatList } from './ChatList';
+import { McpPage } from './McpPage';
 import { postToExtension } from '../vscode';
-import type { ChatMessage, ChatMeta, ExtensionMessage } from '../types';
+import type { ChatMessage, ChatMeta, ExtensionMessage, McpServerStatus } from '../types';
 
 let _idCounter = 0;
 function uid(): string {
@@ -51,6 +52,8 @@ export function ChatPanel() {
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [showChatList, setShowChatList] = useState(false);
+  const [mcpServers, setMcpServers] = useState<McpServerStatus[]>([]);
+  const [showMcpPage, setShowMcpPage] = useState(false);
 
   // Ref mirror of the active chat id so the (mount-only) message handler and the
   // persistence effect always read the current value.
@@ -315,6 +318,10 @@ export function ChatPanel() {
           });
           break;
 
+        case 'mcpStatus':
+          setMcpServers(msg.servers);
+          break;
+
         case 'toolResult': {
           // Commit the assistant turn for this tool call into LLM history
           const tc = pendingTurnRef.current.toolCalls.find((t) => t.id === msg.id);
@@ -501,6 +508,7 @@ export function ChatPanel() {
     postToExtension({ type: 'approveTerminal', id, approved: false });
   }, []);
 
+
   const folderName = workspaceRoot
     ? (workspaceRoot.split('/').pop() ?? workspaceRoot)
     : null;
@@ -543,6 +551,19 @@ export function ChatPanel() {
             />
           )}
         </div>
+
+        <button
+          className={`chat-panel__icon-btn mcp-trigger${mcpServers.length > 0 ? ' mcp-trigger--active' : ''}${showMcpPage ? ' mcp-trigger--open' : ''}`}
+          onClick={() => setShowMcpPage((v) => !v)}
+          title="MCP Servers"
+          aria-label="MCP Servers"
+        >
+          🔌
+          {mcpServers.length > 0 && (
+            <span className="mcp-trigger__badge">{mcpServers.length}</span>
+          )}
+        </button>
+
         <button
           className="chat-panel__icon-btn"
           onClick={handleSetApiKey}
@@ -599,20 +620,25 @@ export function ChatPanel() {
           {' '}or run <code>MisterPilot: Set API Key</code> from the command palette.
         </div>
       )}
-      <div className="chat-panel__messages">
-        <MessageList
-          messages={messages}
-          onApply={handleApply}
-          onReject={handleReject}
-          onViewFull={handleViewFull}
-          onApproveTerminal={handleApproveTerminal}
-          onDenyTerminal={handleDenyTerminal}
-        />
-      </div>
-
-      <div className="chat-panel__input">
-        <InputBar onSend={handleSend} onStop={handleStop} disabled={streaming} />
-      </div>
+      {showMcpPage ? (
+        <McpPage servers={mcpServers} onClose={() => setShowMcpPage(false)} />
+      ) : (
+        <>
+          <div className="chat-panel__messages">
+            <MessageList
+              messages={messages}
+              onApply={handleApply}
+              onReject={handleReject}
+              onViewFull={handleViewFull}
+              onApproveTerminal={handleApproveTerminal}
+              onDenyTerminal={handleDenyTerminal}
+            />
+          </div>
+          <div className="chat-panel__input">
+            <InputBar onSend={handleSend} onStop={handleStop} disabled={streaming} />
+          </div>
+        </>
+      )}
     </div>
   );
 }
