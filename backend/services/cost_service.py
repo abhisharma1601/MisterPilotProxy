@@ -14,14 +14,14 @@ MARGIN = 1.30
 
 _PRICING = {
     "deepseek-v4-pro": {
-        "output":    0.00000087,
-        "cache_hit": 0.000000003625,
-        "cache_miss": 0.000000435,
+        "output":    0.00000396,
+        "cache_hit": 0.000000044,
+        "cache_miss": 0.00000132,
     },
     "deepseek-v4-flash": {
-        "output":    0.00000028,
-        "cache_hit": 0.0000000028,
-        "cache_miss": 0.00000014,
+        "output":    0.00000132,
+        "cache_hit": 0.000000014,
+        "cache_miss": 0.00000044,
     },
 }
 _FALLBACK = "deepseek-v4-pro"
