@@ -7,22 +7,21 @@ load_dotenv(Path(__file__).parent / ".env")
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
-from . import __version__
+from . import __version__, debug
 from .config import get_config
 from .logging_config import setup_logging
-from .api.routes import terminal, agent, model
 from .api.routes.model import ChatCompletionRequest, model_chat
+from .services import cost_service
+from .services.model_access import available_models, is_auto_model
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     setup_logging()
     yield
-    try:
-        from .mcp.client import get_mcp_manager
-        get_mcp_manager().stop_all()
-    except Exception:
-        pass
+    # Let in-flight wallet charges finish; any still pending after the timeout
+    # is cancelled and written to the dead-letter file, not lost.
+    await cost_service.drain()
 
 
 def create_app() -> FastAPI:
@@ -43,14 +42,22 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(terminal.router, prefix="/terminal", tags=["terminal"])
-    app.include_router(agent.router, prefix="/agent", tags=["agent"])
-    app.include_router(model.router, prefix="/model", tags=["model"])
+    # OpenAI-compatible endpoints.
+    @app.get("/v1/models", tags=["v1"])
+    async def v1_models(raw_request: Request):
+        """Drop-in replacement for OpenAI /v1/models: the models the caller's key can use."""
+        auth = raw_request.headers.get("Authorization", "")
+        raw_key = auth[7:].strip() if auth.startswith("Bearer ") else ""
+        return {"object": "list", "data": available_models(raw_key)}
 
-    # OpenAI-compatible alias
     @app.post("/v1/chat/completions", tags=["v1"])
     async def v1_chat_completions(body: ChatCompletionRequest, raw_request: Request):
         """Drop-in replacement for OpenAI /v1/chat/completions."""
+        # Scorer calibration printout (DEBUG_ROUTE_REQUEST=1). misterpilot-auto
+        # reports the verdict it routes with from model_access instead, so
+        # nothing is scored twice.
+        if debug.enabled() and not is_auto_model(body.model):
+            debug.score_in_background(body.model_dump(exclude_none=True), body.model)
         return await model_chat(body, raw_request)
 
     return app

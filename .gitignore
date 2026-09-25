@@ -28,6 +28,9 @@ htmlcov/
 .env.*
 !.env.example
 
+# Wallet charges that could not be delivered — contain MisterPilot API keys
+failed_charges*.jsonl
+
 # Node (extension)
 node_modules/
 
