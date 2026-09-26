@@ -1,8 +1,67 @@
 deepseek:
   base_url: "https://api.deepseek.com/v1"
-  model: "deepseek-v4-pro"
   timeout: 60
   max_retries: 3
+  include_usage: true
+  # DeepSeek drifts into Chinese on short or thin prompts; pin the language.
+  system_instruction: >-
+    Always write your replies, explanations and code comments in the same
+    language as the user's most recent message; if that is unclear, use
+    English. Never switch to Chinese unless the user writes in Chinese.
+
+openai:
+  base_url: "https://api.openai.com/v1"
+  timeout: 60
+  max_retries: 3
+  include_usage: true
+
+claude:
+  # OpenAI-compatible endpoint; needs the /v1/ path, unlike Anthropic's host URL.
+  # Used only as the fallback when native is on.
+  base_url: "https://api.anthropic.com/v1/"
+  timeout: 60
+  max_retries: 3
+  # Required: streamed requests without usage are never charged.
+  include_usage: true
+  # Native Messages API: prompt caching (~90% off repeated input), adaptive
+  # thinking and effort. The compatible endpoint above has no caching.
+  native: true
+
+# "misterpilot-auto": MisterPilot keys only (no BYOK). The complexity router
+# picks the model per request; this is its fallback when it can't.
+auto:
+  model: "deepseek-v4-pro"
+  # Show the routed model at the top of each Auto reply in the chat.
+  show_route: true
+  # Conversation floors: the score can be raised (never lowered) by
+  #  - earlier user turns, minus history_decay per turn of age;
+  #  - the previous Auto reply's score, minus max_drop_per_turn per user turn
+  #    (read from its route line, so it needs show_route);
+  #  - a long context: past long_context_tokens, at least long_context_min_score.
+  history_turns: 5
+  history_decay: 1
+  max_drop_per_turn: 3
+  long_context_tokens: 100000
+  long_context_min_score: 7
+  # Customer modes (model aliases misterpilot-auto-economy / -quality, header
+  # X-MisterPilot-Auto-Mode, or body misterpilot.mode) shift the score.
+  default_mode: "balanced"
+  mode_shifts: {economy: -2, balanced: 0, quality: 2}
+  # Only step down to a cheaper model mid-chat when it pays off over this
+  # many turns (a switch re-sends the whole context uncached).
+  switch_horizon_turns: 3
+  expected_output_tokens: 1500
+  session_ttl_seconds: 3600
+  # Skip the AI verifier for confident scores away from a tier edge.
+  verify_min_confidence: 0.75
+  verify_boundary_margin: 1
+  # Daily budget (X-MisterPilot-Daily-Budget-INR / body misterpilot.daily_budget_inr).
+  budget_warn_ratio: 0.8
+  budget_shift: -2
+  budget_cap_model: "gpt-5.4-mini"
+  # Failover circuit breaker.
+  breaker_failures: 3
+  breaker_cooldown_seconds: 30
 
 server:
   host: "0.0.0.0"

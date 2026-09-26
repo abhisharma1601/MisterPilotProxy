@@ -308,3 +308,14 @@ class RedactionPipeline:
 
         parts.append(text[cursor:])
         return "".join(parts), findings
+
+
+_pipeline: RedactionPipeline | None = None
+
+
+def get_pii_pipeline() -> RedactionPipeline:
+    """The process-wide pipeline, configured from the environment on first use."""
+    global _pipeline
+    if _pipeline is None:
+        _pipeline = RedactionPipeline(PseudonymConfig.from_env())
+    return _pipeline

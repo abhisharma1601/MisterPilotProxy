@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from backend.llm import llm_client
+from backend.llm.llm_client import Provider
 from backend.main import app
 from backend.pii.pipeline import Finding
 
@@ -19,15 +21,35 @@ def _mock_pipeline():
 
 
 @contextmanager
+def _patch_client(client_mock):
+    """Serve DeepSeek requests from ``client_mock``.
+
+    Patches the provider client factory rather than anything in the route, so
+    key resolution, provider selection and LLMClient all run for real — only
+    the upstream provider is replaced. Debug scoring is forced off even if
+    DEBUG_ROUTE_REQUEST is set in the shell: it would make a real AI call.
+    """
+    def factory(provider, key):
+        assert provider is Provider.DEEPSEEK, f"unexpected provider {provider}"
+        return client_mock
+
+    with (
+        patch.object(llm_client, "get_provider_client", factory),
+        patch("backend.debug.enabled", return_value=False),
+    ):
+        yield
+
+
+@contextmanager
 def _patch_deps(client_mock):
     with (
-        patch("backend.api.routes.model.get_deepseek_client", return_value=client_mock),
+        _patch_client(client_mock),
         patch("backend.api.routes.model.get_pii_pipeline", return_value=_mock_pipeline()),
     ):
         yield
 
 
-# ── non-streaming /model/chat ────────────────────────────────────────
+# ── non-streaming /v1/chat/completions ───────────────────────────────
 
 @pytest.mark.asyncio
 async def test_model_chat_returns_openai_format():
@@ -57,7 +79,7 @@ async def test_model_chat_returns_openai_format():
     with _patch_deps(mock_client):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
-                "/model/chat",
+                "/v1/chat/completions",
                 json={
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "user", "content": "Hello!"}],
@@ -77,7 +99,7 @@ async def test_model_chat_missing_api_key_returns_401():
     with _patch_deps(mock_client):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
-                "/model/chat",
+                "/v1/chat/completions",
                 json={
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "user", "content": "Hi"}],
@@ -98,7 +120,7 @@ async def test_model_chat_propagates_error():
     with _patch_deps(mock_client):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
-                "/model/chat",
+                "/v1/chat/completions",
                 json={
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "user", "content": "Hi"}],
@@ -132,12 +154,12 @@ async def test_model_chat_sanitizes_pii():
     pipe.redact.return_value = ("[REDACTED]", [Finding(entity_type="EMAIL", original="user@example.com", placeholder="[REDACTED]", context="...")])
 
     with (
-        patch("backend.api.routes.model.get_deepseek_client", return_value=mock_client),
+        _patch_client(mock_client),
         patch("backend.api.routes.model.get_pii_pipeline", return_value=pipe),
     ):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             await client.post(
-                "/model/chat",
+                "/v1/chat/completions",
                 json={
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "user", "content": "my email is user@example.com"}],
@@ -148,7 +170,7 @@ async def test_model_chat_sanitizes_pii():
     assert captured_message["content"] == "[REDACTED]"
 
 
-# ── streaming /model/chat ────────────────────────────────────────────
+# ── streaming /v1/chat/completions ───────────────────────────────────
 
 @pytest.mark.asyncio
 async def test_model_chat_stream_returns_openai_sse():
@@ -171,7 +193,7 @@ async def test_model_chat_stream_returns_openai_sse():
     with _patch_deps(mock_client):
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             response = await client.post(
-                "/model/chat",
+                "/v1/chat/completions",
                 json={
                     "model": "deepseek-v4-pro",
                     "messages": [{"role": "user", "content": "Hello!"}],
@@ -217,35 +239,3 @@ async def test_v1_chat_completions_alias():
 
     assert response.status_code == 200
 
-
-# ── /model/stream backward compat ─────────────────────────────────────
-
-@pytest.mark.asyncio
-async def test_model_stream_still_works():
-    mock_chunks = [
-        {"id": "x", "object": "chat.completion.chunk", "created": 1, "model": "m",
-         "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}],
-         "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}},
-    ]
-
-    mock_client = MagicMock()
-
-    async def mock_stream(*args, **kwargs):
-        for c in mock_chunks:
-            yield c
-
-    mock_client.stream_chat_raw = mock_stream
-
-    with _patch_deps(mock_client):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.post(
-                "/model/stream",
-                json={
-                    "model": "deepseek-v4-pro",
-                    "messages": [{"role": "user", "content": "Hi"}],
-                },
-                headers={"Authorization": "Bearer sk-test-key"},
-            )
-
-    assert response.status_code == 200
-    assert "data: [DONE]" in response.text
