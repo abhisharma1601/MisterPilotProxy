@@ -170,6 +170,34 @@ async def test_model_chat_sanitizes_pii():
     assert captured_message["content"] == "[REDACTED]"
 
 
+@pytest.mark.asyncio
+async def test_model_chat_sends_the_model_output_limit_not_the_clients():
+    captured = {}
+    mock_completion = MagicMock()
+    mock_completion.model_dump.return_value = {
+        "id": "x", "object": "chat.completion", "created": 1, "model": "deepseek-v4-pro",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "logprobs": None, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }
+    mock_client = MagicMock()
+
+    async def capture_complete(*args, **kwargs):
+        captured.update(kwargs)
+        return mock_completion
+
+    mock_client.complete = capture_complete
+
+    with _patch_deps(mock_client):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            await client.post(
+                "/v1/chat/completions",
+                json={"model": "deepseek-v4-pro", "messages": [{"role": "user", "content": "Hi"}], "max_tokens": 4000},
+                headers={"Authorization": "Bearer sk-test-key"},
+            )
+
+    assert captured["max_tokens"] == 128000
+
+
 # ── streaming /v1/chat/completions ───────────────────────────────────
 
 @pytest.mark.asyncio

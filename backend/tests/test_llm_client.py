@@ -14,6 +14,7 @@ from backend.llm.llm_client import (
     LLMUnavailableError,
     Provider,
     ProviderClient,
+    output_tokens,
 )
 from backend.services.cost_service import estimate_turn_usd, price_usd
 
@@ -31,6 +32,28 @@ def api_error(cls, status):
 
 
 # ── request shaping ───────────────────────────────────────────────────
+
+@pytest.mark.parametrize("model,expected", [
+    ("deepseek-v4-pro", 128000), ("deepseek-flash", 128000),
+    ("gpt-5.5", 64000), ("claude-sonnet-5", 64000),
+    ("gpt-5.4-nano", 32000), ("claude-haiku-4-5", 16384), ("gpt-5.3-codex", 16384),
+])
+@pytest.mark.parametrize("requested", [None, 100, 1_000_000])
+def test_output_tokens_is_fixed_per_model(model, expected, requested):
+    assert output_tokens(model, requested) == expected
+
+
+def test_output_tokens_of_an_unlisted_model_is_the_request_or_default():
+    assert output_tokens("other", 500) == 500
+    assert output_tokens("other", None) == 8192
+
+
+def test_provider_client_passes_max_tokens_through():
+    # The per-model limit is applied by the route; internal calls keep their own.
+    params = provider_client(Provider.DEEPSEEK)._params(
+        stream=False, messages=MESSAGES, model="deepseek-flash", max_tokens=1200)
+    assert params["max_tokens"] == 1200
+
 
 def test_openai_effort_is_sent_without_tools():
     params = provider_client(Provider.OPENAI)._params(

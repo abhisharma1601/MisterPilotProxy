@@ -190,7 +190,7 @@ def test_thinking_models_get_adaptive_thinking_effort_and_caching(client):
                             temperature=0.7, max_tokens=8192, effort="high")
     assert params["thinking"] == {"type": "adaptive"}
     assert params["output_config"] == {"effort": "high"}
-    assert params["max_tokens"] == 32000
+    assert params["max_tokens"] == 8192                    # the per-model limit is set by the route
     assert params["cache_control"] == EPHEMERAL
     assert "extra_body" not in params                      # no temperature on Claude 5
     assert "extra_headers" not in params
