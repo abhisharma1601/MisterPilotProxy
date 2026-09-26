@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
 from ...config import get_config
-from ...llm.llm_client import LLMAuthError, LLMRequestError, Provider
+from ...llm.llm_client import LLMAuthError, LLMRequestError, Provider, output_tokens
 from ...logging_config import log_pii_findings
 from ...pii import get_pii_pipeline
 from ...services import provider_health
@@ -353,7 +353,7 @@ async def model_chat(
             completion = await access.client.complete(
                 messages,
                 temperature=body.temperature,
-                max_tokens=body.max_tokens,
+                max_tokens=output_tokens(access.upstream_model, body.max_tokens),
                 tools=body.tools or None,
                 tool_choice=body.tool_choice,
                 effort=access.effort,
@@ -454,7 +454,7 @@ async def _stream_chunks(
                 async for chunk in access.client.stream_chat_raw(
                     messages,
                     temperature=body.temperature,
-                    max_tokens=body.max_tokens,
+                    max_tokens=output_tokens(access.upstream_model, body.max_tokens),
                     tools=body.tools or None,
                     tool_choice=body.tool_choice,
                     effort=access.effort,

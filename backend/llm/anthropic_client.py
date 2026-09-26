@@ -75,9 +75,6 @@ _EFFORTS = {"low", "medium", "high", "xhigh", "max"}
 _BOUND_THINKING = {"claude-opus-5-5"}
 _BINDING_BETA = "thinking-binding-controls-2026-08-01"
 
-# Same floor as the OpenAI-protocol path: thinking shares the output budget.
-_THINKING_MIN_OUTPUT_TOKENS = 32000
-
 _FINISH_REASONS = {
     "end_turn": "stop",
     "stop_sequence": "stop",
@@ -536,7 +533,6 @@ class AnthropicClient:
                 params["tool_choice"] = choice
         if model in _ADAPTIVE_THINKING:
             params["thinking"] = {"type": "adaptive"}
-            params["max_tokens"] = max(params["max_tokens"], _THINKING_MIN_OUTPUT_TOKENS)
             if effort in _EFFORTS:
                 params["output_config"] = {"effort": effort}
         elif temperature is not None:

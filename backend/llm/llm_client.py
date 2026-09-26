@@ -114,11 +114,32 @@ _CLAUDE_NO_SAMPLING = {"claude-opus-5-5", "claude-sonnet-5"}
 _CLAUDE_NO_FORCED_TOOLS = {"claude-opus-5-5"}
 
 
-# Models that think/reason before answering spend that on the same output
-# budget, so a client's small max_tokens (8192 by default) gets eaten by
-# thinking and the visible reply is cut off. Raise it to at least this floor.
-# Billing is per token used, so the higher ceiling costs nothing unused.
-_THINKING_MIN_OUTPUT_TOKENS = 32000
+# Output budget for each model on client chat requests, whatever the client
+# asks for (internal calls such as the complexity verifier set their own).
+# A client's small max_tokens (8192 by default) cuts big replies off — and on
+# thinking models the thinking eats the same budget. Billing is per token
+# used, so a higher ceiling costs nothing unused.
+_OUTPUT_TOKENS: Dict[str, int] = {
+    "deepseek-v4-pro": 128000,
+    "deepseek-flash": 128000,
+    "gpt-5.5": 64000,
+    "gpt-5.4": 64000,
+    "gpt-5.4-mini": 64000,
+    "claude-opus-5-5": 64000,
+    "claude-sonnet-5": 64000,
+    "gpt-5.4-nano": 32000,
+    "claude-haiku-4-5": 16384,
+    "gpt-5.3-codex": 16384,
+}
+_DEFAULT_OUTPUT_TOKENS = 8192
+
+
+def output_tokens(model: str, requested: Optional[int]) -> int:
+    """The output budget for ``model``; ``requested`` only for an unlisted one."""
+    return _OUTPUT_TOKENS.get(model, requested or _DEFAULT_OUTPUT_TOKENS)
+
+
+# Models that think/reason before answering and take an effort level.
 _THINKING_MODELS = {
     "claude-opus-5-5", "claude-sonnet-5",
     "gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex",
@@ -204,8 +225,6 @@ class ProviderClient:
     def _params(self, *, stream: bool, **request: Any) -> Dict[str, Any]:
         params: Dict[str, Any] = {k: v for k, v in request.items() if v is not None}
         effort = params.pop("effort", None)
-        if params.get("model") in _THINKING_MODELS and "max_tokens" in params:
-            params["max_tokens"] = max(params["max_tokens"], _THINKING_MIN_OUTPUT_TOKENS)
         if self.provider is Provider.OPENAI:
             # GPT-5.x are reasoning models: they reject ``max_tokens`` (renamed
             # ``max_completion_tokens``) and any temperature but the default.
