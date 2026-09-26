@@ -96,7 +96,7 @@ PROMPT_CAP = 2_500         # chars of user request sent to the verifier
 # A non-reasoning model: the verifier needs a short JSON answer, and reasoning
 # models spend a small max_tokens budget on thinking and return empty content.
 _DEFAULT_MODEL = "deepseek-flash"
-_MAX_TOKENS = 600
+_MAX_TOKENS = 1200
 
 
 def enabled() -> bool:
